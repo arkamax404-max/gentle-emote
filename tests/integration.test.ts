@@ -1,11 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Container, visibleWidth } from "@earendil-works/pi-tui";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const PLACEHOLDER = "\u{10EEEE}";
 
 /** Loads the extension against a fake Pi and a real pi-tui component tree (Ghostty, no multiplexer). */
-async function boot() {
+async function boot(cwd = "/tmp") {
   for (const key of ["TMUX", "ZELLIJ", "ZELLIJ_SESSION_NAME", "KITTY_WINDOW_ID", "TERM_PROGRAM"]) delete process.env[key];
   process.env.GHOSTTY_RESOURCES_DIR = "/usr/share/ghostty";
   process.env.PI_CODING_AGENT_DIR = "/nonexistent/agent";
@@ -32,7 +35,7 @@ async function boot() {
   const tui = { children: [widgets, editor], requestRender() {}, getFocusedComponent: () => null };
   const ctx = {
     hasUI: true,
-    cwd: "/tmp",
+    cwd,
     model: { id: "claude-test" },
     ui: {
       notify() {},
@@ -54,6 +57,37 @@ async function boot() {
 }
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/g, "");
+
+test("session wiring mirrors image selections and prompt overlays, shutdown stops delivery", async () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-session-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ externalDisplay: { enabled: true, url: "http://127.0.0.1:8000/emote" } }));
+  const originalFetch = globalThis.fetch;
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (_url, init) => { calls.push(init!); return new Response(); };
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root);
+    await lab.emit("tool_execution_start", { toolName: "bash" });
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.ok(calls.length > 0);
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "tool");
+    await lab.emit("ui_prompt_start");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "ask");
+    await lab.emit("ui_prompt_end");
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "tool");
+    await lab.shutdown();
+    const count = calls.length;
+    await lab.emit("tool_execution_start", { toolName: "read" });
+    assert.equal(calls.length, count);
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("the framed avatar sits beside the prompt, which grows to the frame height", async () => {
   const lab = await boot();

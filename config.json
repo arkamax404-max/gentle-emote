@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "externalDisplay": { "enabled": false, "url": "", "timeoutMs": 1000 },
   "debug": false,
   "size": 10,
   "placement": "beside-editor",

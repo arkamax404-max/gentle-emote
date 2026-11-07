@@ -4,6 +4,8 @@ import type { EmoteState, EmotesConfig, FrameSet, FrameTransform } from "./types
 import type { Renderer, RenderedFrame } from "./renderer.ts";
 import { cycleFrameFiles, discoverFrames } from "./emotes.ts";
 import { log } from "./log.ts";
+import { basename } from "node:path";
+import type { FrameSink } from "./external_display.ts";
 
 // --- Helpers ---
 
@@ -38,6 +40,16 @@ export abstract class BaseImageRenderer implements Renderer {
   protected lastShownBase64: string | null = null;
   protected currentFrame: RenderedFrame | null = null;
   protected size: number;
+  private frameSink: FrameSink | null = null;
+  private setName = "";
+
+  setFrameSink(sink: FrameSink | null) { this.frameSink = sink; }
+
+  private selected(base64: string, state: EmoteState, frame: string, force = false): boolean {
+    try { this.frameSink?.({ base64, state, frame, set: this.setName }); }
+    catch { log("externalDisplay: frame sink failed"); }
+    return this.show(base64, force);
+  }
 
   constructor(size: number) {
     this.size = size;
@@ -49,6 +61,7 @@ export abstract class BaseImageRenderer implements Renderer {
 
   loadFrames(emoteSetDir: string, _extDir: string, transform?: FrameTransform) {
     this.frameMap = discoverFrames(emoteSetDir, transform);
+    this.setName = basename(emoteSetDir);
   }
 
   getFrameFiles(state: EmoteState): string[] {
@@ -107,7 +120,7 @@ export abstract class BaseImageRenderer implements Renderer {
   showFrame(state: EmoteState, name: string, force = false): boolean {
     const b64 = this.getBase64(state, name);
     if (!b64) return false;
-    return this.show(b64, force);
+    return this.selected(b64, state, name, force);
   }
 
   showRandomFrame(state: EmoteState, force = false): boolean {
@@ -116,7 +129,7 @@ export abstract class BaseImageRenderer implements Renderer {
     const file = randomPick(frameSet.files);
     const b64 = frameSet.base64Cache.get(file);
     if (!b64) return false;
-    return this.show(b64, force);
+    return this.selected(b64, state, file, force);
   }
 
   showTalkFrame(emotesConfig: EmotesConfig): boolean {
@@ -127,7 +140,7 @@ export abstract class BaseImageRenderer implements Renderer {
       const file = weightedRandomPick(emotesConfig.talk.weights);
       const b64 = frameSet.base64Cache.get(file);
       if (!b64) return this.showRandomFrame("talk");
-      return this.show(b64);
+      return this.selected(b64, "talk", file);
     }
     return this.showRandomFrame("talk");
   }
@@ -139,7 +152,7 @@ export abstract class BaseImageRenderer implements Renderer {
     const file = closeFile ?? frameSet.files[0]!;
     const b64 = frameSet.base64Cache.get(file);
     if (!b64) return false;
-    return this.show(b64);
+    return this.selected(b64, "talk", file);
   }
 
   showCycleFrame(state: EmoteState, index: number): boolean {
@@ -149,7 +162,7 @@ export abstract class BaseImageRenderer implements Renderer {
     const file = files[index % files.length]!;
     const b64 = frameSet!.base64Cache.get(file);
     if (!b64) return false;
-    return this.show(b64);
+    return this.selected(b64, state, file);
   }
 
   getCycleFrameCount(state: EmoteState): number {

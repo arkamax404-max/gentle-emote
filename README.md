@@ -11,7 +11,7 @@
 
 A pixel-art **Gentleman** that sits in a frame to the left of your prompt and acts out what the agent is doing. Works in [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell) and [Pi](https://pi.dev).
 
-He only listens to local session events: no model calls, no context, no network. Forked from [cgxeiji/pi-emote](https://github.com/cgxeiji/pi-emote).
+He listens to local session events: no model calls or context. Networking is off by default; optional external-display mirroring sends only avatar images and visual metadata. Forked from [cgxeiji/pi-emote](https://github.com/cgxeiji/pi-emote).
 
 ## Scenes
 
@@ -111,6 +111,43 @@ Drop a `config.json` with only the keys you want to change in either place (the 
 | `terminals` | see `config.json` | Renderer per terminal (see below) |
 
 `config.json` in the package root has every default.
+
+## Mirror to an external 64×64 display
+
+With the sibling `emote-display-simulator` receiver running locally, add this to `.pi/extensions/gentle-emote/config.json` (or your global config):
+
+```json
+{
+  "externalDisplay": {
+    "enabled": true,
+    "url": "http://127.0.0.1:8000/emote",
+    "timeoutMs": 1000
+  }
+}
+```
+
+Run `/reload`, open the simulator in your browser, then `/emote demo`. Set `enabled` to `false` and reload to stop. Shutdown/reload aborts delivery and discards pending frames.
+
+- **Trust:** project config can enable outbound requests and override the destination through the normal layered merge. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
+- **Options:** disabled by default; URL defaults to empty (no implicit destination). `timeoutMs` defaults to `1000` and must be finite between `1` and `30000` inclusive. Invalid options safely disable networking without disabling the local avatar.
+- **Image:** raw binary PNG, exactly 64×64, opaque black background. Post-accent sprites are centered without enlargement; oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared sprites.
+- **Delivery:** one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
+- **Scope:** image renderers only (including Kitty Unicode placeholders). ASCII and headless sessions do not mirror. Hidden terminal widgets may still select frames; this is not a separate headless animation engine.
+
+### Receiver protocol v1
+
+`POST` to the configured URL with `Content-Type: image/png` and these headers:
+
+| Header | Value |
+|--------|-------|
+| `X-Emote-Version` | `1` |
+| `X-Emote-State` | Selected state, e.g. `think` |
+| `X-Emote-Frame` | Selected filename, e.g. `think.png` |
+| `X-Emote-Set` | Actual set directory basename, never its path |
+| `X-Emote-Stream-Id` | Random UUID per sender lifetime |
+| `X-Emote-Sequence` | Increasing positive integer (1–20 digits), assigned per request |
+
+Identifiers must match `[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}`. Unsupported custom names are skipped and reported without affecting local rendering. Delivery/configuration errors are reported as warnings; diagnostics never include payloads or the destination URL.
 
 ## Create your own avatar
 

@@ -13,7 +13,14 @@ export type Placement = "beside-editor" | "above-editor";
 /** "auto" follows Gentle Shell's /gentle:customize color; otherwise a banner color name or #rrggbb. */
 export type AccentSetting = "auto" | "pink" | "cyan" | "yellow" | "green" | `#${string}`;
 
+export interface ExternalDisplayConfig {
+  enabled: boolean;
+  url: string;
+  timeoutMs: number;
+}
+
 export interface Config {
+  externalDisplay: ExternalDisplayConfig;
   enabled: boolean;
   debug: boolean;
   size: number;

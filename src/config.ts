@@ -37,6 +37,7 @@ function loadJsonFile(path: string): any | null {
 }
 
 const DEFAULTS: Config = {
+  externalDisplay: { enabled: false, url: "", timeoutMs: 1000 },
   enabled: true,
   debug: false,
   size: 10,

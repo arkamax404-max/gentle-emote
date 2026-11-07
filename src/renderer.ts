@@ -22,6 +22,8 @@ export type RenderedFrame =
  * - AsciiRenderer (render_ascii.ts): plain text fallback
  */
 export interface Renderer {
+  /** Observe selected post-accent sprites independently of terminal repaint caching. */
+  setFrameSink?(sink: import("./external_display.ts").FrameSink | null): void;
   /** Set the TUI reference for requesting re-renders. */
   setTui(tui: TUI | null): void;
 

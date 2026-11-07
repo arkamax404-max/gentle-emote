@@ -21,6 +21,7 @@ import { Animator } from "./animator.ts";
 import { createWidgetFactory } from "./widget.ts";
 import { resolveRenderer } from "./terminal.ts";
 import { readYoloRest } from "./yolo.ts";
+import { ExternalDisplay } from "./external_display.ts";
 
 const WIDGET_KEY = "gentle-emote";
 const BANNER_POLL_MS = 2000;
@@ -152,6 +153,7 @@ export default function (pi: ExtensionAPI) {
 
   if (!config.enabled) return;
 
+  let externalDisplay: ExternalDisplay | null = null;
   let currentEmoteSet = "gentleman";
   let widgetActive = false;
   let lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
@@ -190,6 +192,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
+    renderer.setFrameSink?.(externalDisplay ? (image) => externalDisplay?.select(image) : null);
     renderer.loadFrames(setDir, extDir, createAccentTransform(accent));
     animator.setEmotesConfig(loadEmotesConfig(setDir));
   }
@@ -390,6 +393,8 @@ export default function (pi: ExtensionAPI) {
     animator.updateConfig(config);
     if (!config.enabled) return;
 
+    externalDisplay?.dispose();
+    externalDisplay = new ExternalDisplay(config.externalDisplay, fetch, (message) => ctx.ui.notify(`[${EXTENSION_NAME}] ${message}`, "warning"));
     lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
     renderer = createRendererFromResolved(lastResolved, config);
     animator.setRenderer(renderer);
@@ -438,6 +443,8 @@ export default function (pi: ExtensionAPI) {
     unwatchYolo();
     animator.stop();
     animator.disposeRenderer();
+    externalDisplay?.dispose();
+    externalDisplay = null;
     unwatchBanner();
     stopTerminalInput?.();
     stopTerminalInput = null;

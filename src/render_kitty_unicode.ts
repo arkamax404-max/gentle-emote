@@ -5,6 +5,8 @@ import type { Renderer, RenderedFrame } from "./renderer.ts";
 import { cycleFrameFiles, discoverFrames } from "./emotes.ts";
 import { wrapTmuxPassthrough } from "./tmux.ts";
 import { log } from "./log.ts";
+import { basename } from "node:path";
+import type { FrameSink } from "./external_display.ts";
 import { defaultBorderColor, frameCols, framePngBase64, frameStroke } from "./frame_image.ts";
 import type { CellSize, FrameBox, Rgb } from "./frame_image.ts";
 
@@ -141,6 +143,16 @@ export class KittyUnicodeRenderer implements Renderer {
   private framedCache = new Map<string, string>();
   private framedCacheKey = "";
   private lastRawBase64: string | null = null;
+  private frameSink: FrameSink | null = null;
+  private setName = "";
+
+  setFrameSink(sink: FrameSink | null) { this.frameSink = sink; }
+
+  private selected(base64: string, state: EmoteState, frame: string, force = false): boolean {
+    try { this.frameSink?.({ base64, state, frame, set: this.setName }); }
+    catch { log("externalDisplay: frame sink failed"); }
+    return this.show(base64, force);
+  }
 
   /** `frameRows > 0` boxes every frame in a rounded border exactly that many rows tall. */
   constructor(size: number, passthrough: boolean, frameRows = 0) {
@@ -179,6 +191,7 @@ export class KittyUnicodeRenderer implements Renderer {
 
   loadFrames(emoteSetDir: string, _extDir: string, transform?: FrameTransform) {
     this.frameMap = discoverFrames(emoteSetDir, transform);
+    this.setName = basename(emoteSetDir);
   }
 
   getFrameFiles(state: EmoteState): string[] {
@@ -233,7 +246,7 @@ export class KittyUnicodeRenderer implements Renderer {
   showFrame(state: EmoteState, name: string, force = false): boolean {
     const b64 = this.getBase64(state, name);
     if (!b64) return false;
-    return this.show(b64, force);
+    return this.selected(b64, state, name, force);
   }
 
   showRandomFrame(state: EmoteState, force = false): boolean {
@@ -242,7 +255,7 @@ export class KittyUnicodeRenderer implements Renderer {
     const file = randomPick(frameSet.files);
     const b64 = frameSet.base64Cache.get(file);
     if (!b64) return false;
-    return this.show(b64, force);
+    return this.selected(b64, state, file, force);
   }
 
   showTalkFrame(emotesConfig: EmotesConfig): boolean {
@@ -253,7 +266,7 @@ export class KittyUnicodeRenderer implements Renderer {
       const file = weightedRandomPick(emotesConfig.talk.weights);
       const b64 = frameSet.base64Cache.get(file);
       if (!b64) return this.showRandomFrame("talk");
-      return this.show(b64);
+      return this.selected(b64, "talk", file);
     }
     return this.showRandomFrame("talk");
   }
@@ -265,7 +278,7 @@ export class KittyUnicodeRenderer implements Renderer {
     const file = closeFile ?? frameSet.files[0]!;
     const b64 = frameSet.base64Cache.get(file);
     if (!b64) return false;
-    return this.show(b64);
+    return this.selected(b64, "talk", file);
   }
 
   showCycleFrame(state: EmoteState, index: number): boolean {
@@ -275,7 +288,7 @@ export class KittyUnicodeRenderer implements Renderer {
     const file = files[index % files.length]!;
     const b64 = frameSet!.base64Cache.get(file);
     if (!b64) return false;
-    return this.show(b64);
+    return this.selected(b64, state, file);
   }
 
   getCycleFrameCount(state: EmoteState): number {
