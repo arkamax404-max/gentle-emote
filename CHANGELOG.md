@@ -2,6 +2,16 @@
 
 All notable changes to gentle-emote will be documented in this file. Entries before v0.1.0 belong to [pi-emote](https://github.com/cgxeiji/pi-emote), the upstream project.
 
+## Unreleased
+
+### Added
+- **`/emote displayOn` / `displayOff`** — pause or resume delivery to configured non-loopback LED/ESP32 destinations without touching the terminal avatar, localhost simulators or the D200 key.
+- **Persistent output preferences** — every On/Off command (`internal`, `debug`, `d200`, `display`) saves its own global boolean under `<agent dir>/extensions/gentle-emote/output-states/<output>.json`; choices survive restarts, `/reload` and project changes, and running sessions restore them at their next start/reload.
+
+### Changed
+- **All outputs default off** — after install or reload, run the matching On command (`/emote internalOn`, `debugOn`, `d200On`, `displayOn`) to see or send anything; previously the avatar was visible by default.
+- **README troubleshooting** — what to do when `/emote` does not list a new command: `/reload` restarts the installed version but does not update it.
+
 ## gentle-emote v0.1.4
 
 ### Fixed

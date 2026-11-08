@@ -8,14 +8,22 @@ import { join } from "node:path";
 const PLACEHOLDER = "\u{10EEEE}";
 
 /** Loads the extension against a fake Pi and a real pi-tui component tree (Ghostty, no multiplexer). */
-async function boot(cwd = "/tmp") {
+async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn"], profile?: string) {
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const agentRoot = profile ?? mkdtempSync(join(tmpdir(), "emote-profile-"));
   for (const key of ["TMUX", "ZELLIJ", "ZELLIJ_SESSION_NAME", "KITTY_WINDOW_ID", "TERM_PROGRAM"]) delete process.env[key];
   process.env.GHOSTTY_RESOURCES_DIR = "/usr/share/ghostty";
-  process.env.PI_CODING_AGENT_DIR = "/nonexistent/agent";
+  process.env.PI_CODING_AGENT_DIR = agentRoot;
 
+  const notices: Array<{ message: string; level: string }> = [];
   const writes: string[] = [];
   const realWrite = process.stdout.write.bind(process.stdout);
-  (process.stdout as any).write = (chunk: string) => { writes.push(String(chunk)); return true; };
+  (process.stdout as any).write = (chunk: string | Uint8Array, ...args: any[]) => {
+    // Node's test runner writes binary protocol messages here too; never swallow them.
+    if (typeof chunk !== "string") return (realWrite as any)(chunk, ...args);
+    writes.push(chunk);
+    return true;
+  };
 
   const handlers = new Map<string, Function[]>();
   const commands = new Map<string, any>();
@@ -38,7 +46,7 @@ async function boot(cwd = "/tmp") {
     cwd,
     model: { id: "claude-test" },
     ui: {
-      notify() {},
+      notify(message: string, level: string) { notices.push({ message, level }); },
       onTerminalInput: () => () => {},
       setWidget: (_key: string, factory: any) => { widgets.clear(); if (factory) widgets.addChild(factory(tui, {})); },
     },
@@ -47,13 +55,19 @@ async function boot(cwd = "/tmp") {
   const { default: extension } = await import("../src/index.ts");
   extension(pi as any);
   await emit("session_start");
+  for (const output of outputs) await commands.get("emote").handler(output, ctx);
   const shutdown = async () => {
     if (shutDown) return;
     shutDown = true;
     await emit("session_shutdown", { reason: "quit" });
   };
   let shutDown = false;
-  return { emit, widgets, editor, writes, shutdown, commands, ctx, restore: () => { (process.stdout as any).write = realWrite; } };
+  return { emit, widgets, editor, writes, notices, shutdown, commands, ctx, restore: () => {
+    (process.stdout as any).write = realWrite;
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    if (!profile) rmSync(agentRoot, { recursive: true, force: true });
+  } };
 }
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/g, "");
@@ -270,10 +284,105 @@ test("/emote d200Off stops the D200 stream without touching config", async () =>
     await flush();
     assert.equal(calls.length, delivered, "d200Off stops delivery");
 
-    // The toggle is runtime-only: no config file was written and the state is not persisted.
+    // Output preferences are stored separately; the project's config stays unchanged.
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")), {});
   } finally {
     await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("all outputs default off; independent global switches survive project changes and restart", async () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-global-"));
+  const profile = join(root, "profile");
+  const config = { externalDisplay: { enabled: true, targets: [
+    { enabled: true, url: "http://localhost:8000/emote" },
+    { enabled: true, url: "http://matrix/emote" },
+    { enabled: false, url: "http://disabled/emote" },
+  ] } };
+  for (const project of ["a", "b"]) {
+    const dir = join(root, project, ".pi", "extensions", "gentle-emote");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "config.json"), JSON.stringify(config));
+  }
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (url) => { calls.push(String(url)); return new Response(); };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(join(root, "a"), [], profile);
+    await lab.emit("tool_execution_start", { toolName: "read" }); await flush();
+    lab.widgets.render(100);
+    assert.equal(calls.length, 0, "configured destinations are silent before explicit On");
+    assert.ok(!lab.editor.render(100).join("").includes(PLACEHOLDER));
+    assert.ok(!lab.writes.some(write => write.includes("\x1b_G") || write.includes("1337;File=")), "no initial graphics");
+    const emote = lab.commands.get("emote");
+    assert.deepEqual(emote.getArgumentCompletions("display").map((item: any) => item.value), ["displayOn", "displayOff"]);
+    await emote.handler("displayOn", lab.ctx); await flush();
+    assert.deepEqual(calls, ["http://matrix/emote"], "displayOn resumes latest frame only on ESP32");
+    calls.length = 0;
+    await emote.handler("debugOn", lab.ctx); await flush();
+    assert.deepEqual(calls, ["http://localhost:8000/emote"]);
+    await emote.handler("d200On", lab.ctx); await flush();
+    calls.length = 0;
+    await emote.handler("displayOff", lab.ctx);
+    await lab.emit("tool_execution_start", { toolName: "write" }); await flush();
+    assert.ok(calls.includes("http://localhost:8000/emote"));
+    assert.ok(calls.includes("http://127.0.0.1:8003/emote"));
+    assert.ok(!calls.includes("http://matrix/emote"), "displayOff leaves both local destinations active");
+    await emote.handler("internalOn", lab.ctx);
+    lab.widgets.render(100);
+    assert.ok(lab.editor.render(100).join("").includes(PLACEHOLDER));
+    await emote.handler("displayOn", lab.ctx); await flush();
+    await lab.shutdown(); lab.restore(); lab = undefined;
+    calls.length = 0;
+    lab = await boot(join(root, "b"), [], profile);
+    await lab.emit("tool_execution_start", { toolName: "read" }); await flush();
+    lab.widgets.render(100);
+    assert.ok(lab.editor.render(100).join("").includes(PLACEHOLDER), "global internalOn survives restart in another project");
+    assert.ok(calls.includes("http://localhost:8000/emote"));
+    assert.ok(calls.includes("http://127.0.0.1:8003/emote"));
+    assert.ok(calls.includes("http://matrix/emote"), "global displayOn survives restart");
+    assert.ok(!calls.includes("http://disabled/emote"), "On never enables disabled destinations");
+    for (const output of ["internalOff", "debugOff", "d200Off", "displayOff"]) await lab.commands.get("emote").handler(output, lab.ctx);
+    await lab.shutdown(); lab.restore(); lab = undefined;
+    calls.length = 0;
+    lab = await boot(join(root, "a"), [], profile);
+    await lab.emit("tool_execution_start", { toolName: "read" }); await flush();
+    lab.widgets.render(100);
+    assert.deepEqual(calls, [], "all saved Off states survive restart");
+    assert.ok(!lab.editor.render(100).join("").includes(PLACEHOLDER));
+    for (const project of ["a", "b"]) assert.deepEqual(JSON.parse(readFileSync(join(root, project, ".pi", "extensions", "gentle-emote", "config.json"), "utf8")), config);
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("failed global save reports an error and leaves the active output and saved data unchanged", async () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-save-failure-"));
+  const profile = join(root, "profile");
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root, ["internalOn"], profile);
+    lab.widgets.render(100);
+    assert.ok(lab.editor.render(100).join("").includes(PLACEHOLDER));
+    const path = join(profile, "extensions", "gentle-emote", "output-states", "internal.json");
+    writeFileSync(path, "invalid-json");
+    const before = lab.writes.length;
+    await lab.commands.get("emote").handler("internalOff", lab.ctx);
+    lab.widgets.render(100);
+    assert.ok(lab.editor.render(100).join("").includes(PLACEHOLDER));
+    assert.equal(lab.writes.length, before);
+    assert.deepEqual(lab.notices.at(-1), {
+      message: "[gentle-emote] cannot save global internal state; output unchanged", level: "error",
+    });
+    assert.equal(readFileSync(path, "utf8"), "invalid-json");
+  } finally {
+    await lab?.shutdown(); lab?.restore();
     rmSync(root, { recursive: true, force: true });
   }
 });

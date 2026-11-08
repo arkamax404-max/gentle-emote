@@ -68,7 +68,18 @@ gentle-shell install npm:gentle-emote
 pi install npm:gentle-emote
 ```
 
-Restart the session (or `/reload`) and the Gentleman says hi.
+Restart the session (or `/reload`), then run `/emote internalOn` to show the Gentleman. All four outputs start off until explicitly enabled; their last On/Off choices are saved globally.
+
+### Missing commands?
+
+`/reload` restarts the already-installed version; it does not fetch new code. If `/emote` does not list a command such as `displayOn`, the session is still running an older copy. Install from an updated source and reload, for example:
+
+```bash
+pi install npm:gentle-emote        # published package
+pi install ./gentle-emote          # local checkout with the changes (loaded from that path)
+```
+
+A source that is already configured keeps loading until it is updated or removed (`pi remove <source>`); installing an additional source does not replace it automatically.
 
 ## Commands
 
@@ -82,8 +93,10 @@ Restart the session (or `/reload`) and the Gentleman says hi.
 | `/emote internalOn` | Shows the terminal avatar again without disabling external delivery |
 | `/emote debugOff` | Pauses POSTs to configured localhost simulators; ESP32 delivery continues |
 | `/emote debugOn` | Resumes localhost delivery immediately with the latest PNG and activity |
-| `/emote d200On` | Mirrors frames to a Ulanzi D200 key on `127.0.0.1:8003` (runtime only, independent of `config.json`) |
+| `/emote d200On` | Mirrors frames to a Ulanzi D200 key on `127.0.0.1:8003`, independently of `config.json` |
 | `/emote d200Off` | Stops the D200 mirror without touching configured destinations |
+| `/emote displayOn` | Resumes delivery to configured non-loopback LED/ESP32 destinations |
+| `/emote displayOff` | Pauses LED/ESP32 delivery without affecting the terminal, simulators or D200 |
 
 Any new prompt cancels a preview, so the avatar always follows the real agent.
 
@@ -103,7 +116,7 @@ Drop a `config.json` with only the keys you want to change in either place (the 
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `enabled` | `true` | Turns the avatar on or off |
+| `enabled` | `true` | Loads the extension and its commands; `false` disables the extension entirely |
 | `placement` | `"beside-editor"` | Where the avatar sits: `"beside-editor"` or `"above-editor"` |
 | `frame` | `true` | Draws a rounded frame around the avatar |
 | `frameRows` | `4` | Avatar height in terminal rows. The prompt grows to match it |
@@ -118,9 +131,15 @@ Drop a `config.json` with only the keys you want to change in either place (the 
 
 `config.json` in the package root has every default.
 
-`internalOn` / `internalOff` affect only the local avatar (graphics or ASCII), not the animation engine, activity tracking or external destinations. While hidden, no terminal image uploads occur. Visibility is runtime-only and resets to visible when the extension is reloaded; this is separate from `enabled: false`, which disables the extension.
+### Global output preferences
 
-`debugOn` / `debugOff` control configured loopback destinations (`localhost`, `.localhost`, IPv4 127/8 and IPv6 `::1`), independently of internal visibility. `debugOff` aborts active local requests and discards their pending frames. `debugOn` resumes with the latest selection; the ESP32's queue, stream and sequence are untouched. These commands do not change diagnostic logging (`config.debug`), invent destinations or enable entries explicitly disabled in configuration. Reload restores delivery according to config.
+The `internal`, `debug`, `d200` and `display` outputs are **off by default**. Each On/Off command saves its own global boolean under `<agent dir>/extensions/gentle-emote/output-states/<output>.json`. The agent dir is `PI_CODING_AGENT_DIR`, or `~/.pi/agent`. Choices survive `/reload`, restarts and project changes until another command changes them. Project configuration cannot override these preferences. Already-running sessions restore them on their next session start/reload; commands change the current session immediately.
+
+`internalOn` / `internalOff` affect only the terminal avatar (graphics or ASCII), not the animation engine, activity tracking or other outputs. While hidden, no terminal image uploads occur. Keep the extension's `enabled: true` so the commands remain available.
+
+`debugOn` / `debugOff` control configured loopback destinations (`localhost`, `.localhost`, IPv4 127/8 and IPv6 `::1`). `displayOn` / `displayOff` control configured non-loopback LED/ESP32 destinations. Each Off aborts that group's active requests and drops pending frames; On resumes with the latest selection and activity. Neither group affects the dedicated D200 mirror or diagnostic logging (`config.debug`).
+
+Output commands do not write `config.json`, invent destinations or enable entries explicitly disabled in configuration. An On preference can be saved before configuring its destination, but delivery still requires valid, enabled external-display configuration. Unreadable or malformed saved preferences leave that output off with a warning; a failed save reports an error and leaves the current output unchanged.
 
 ## Mirror to an external 64×64 display
 
@@ -155,9 +174,9 @@ To send to both the local simulator and a MatrixPortal receiver, replace the sin
 
 Optional `background` accepts an RGB hex color (`"#000000"` by default). It composites genuinely transparent pixels only within the drawn sprite PNG bounds; outer canvas padding and the text area stay black. **opaque black pixels in sprites remain black**. Set `"background": "#404040"` on the parent to try a dim gray on both destinations, or on one target to override it independently. Invalid color values disable that destination. Very dark grays may quantize to black on low-bit-depth panels. Optional `backgroundCoverage` (0–1, default 1) applies a fixed 4×4 ordered dither to the transparency background only; `0.75` retains 75% gray pixels and uses black for the rest. Coverage has 1/16 increments and is inherited/overridden per target. This reduces apparent background brightness without temporal flicker or changing opaque artwork.
 
-Run `/reload`, open the simulator in your browser, then `/emote demo`. Set `enabled` to `false` and reload to stop. Shutdown/reload aborts delivery and discards pending frames.
+Run `/reload`, open the simulator in your browser, then `/emote debugOn` and `/emote demo`. For the LED/ESP32, use `/emote displayOn`. Stop each group with its corresponding Off command; the choice persists. Shutdown/reload aborts pending delivery, then the next session restores saved preferences.
 
-- **Trust:** project config can enable outbound requests and override the destination through the normal layered merge. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
+- **Trust:** project config can override destinations through the normal layered merge; saved `debugOn` or `displayOn` preferences allow delivery to those enabled destinations. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
 - **Options:** disabled by default; URL defaults to empty (no implicit destination). `timeoutMs` defaults to `1000` and must be finite between `1` and `30000` inclusive. Invalid options safely disable networking without disabling the local avatar.
 - **Image:** raw binary PNG, exactly 64×64, opaque black canvas with configurable transparency background inside the sprite bounds (black by default). Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared sprites.
 - **Delivery:** per destination, one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set + activity selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
@@ -171,8 +190,9 @@ Optional `outline: "#ffffff"` adds a one-pixel external white silhouette to disp
 to the terminal: every selected frame, its labels and the outline are POSTed to
 `http://127.0.0.1:8003/emote`. `/emote d200Off` disposes it.
 
-- The toggle is **runtime only**: it never writes `config.json` and never changes configured
-  `externalDisplay` destinations, so it cannot be persisted by accident.
+- The toggle is **global and persistent**, initially off. It never writes `config.json` or changes
+  configured `externalDisplay` destinations. Only `/emote d200On` and `/emote d200Off` change its
+  saved preference.
 - Port **8003** keeps the key clear of the browser simulator (`8000`) and of the ESP32 firmware
   (`80`). `GENTLE_EMOTE_D200_PORT` overrides it for local experiments.
 - Enabling it mid-session starts with the current activity labels and re-sends the current frame.

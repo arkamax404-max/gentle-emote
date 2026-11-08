@@ -72,6 +72,17 @@ export class ExternalDisplays {
     return count;
   }
 
+  /** LED/ESP32 destinations are the configured non-loopback targets. */
+  setDisplayEnabled(enabled: boolean): number {
+    let count = 0;
+    for (const display of this.displays) {
+      if (!display.enabled || display.local) continue;
+      display.setPaused(!enabled);
+      count++;
+    }
+    return count;
+  }
+
   select(image: SelectedImage): void { for (const display of this.displays) display.select(image); }
   updateActivity(activity: DisplayActivity): void { for (const display of this.displays) display.updateActivity(activity); }
   dispose(): void { for (const display of this.displays) display.dispose(); this.displays = []; }

@@ -2,6 +2,19 @@
 
 Fork of pi-emote: animated pixel-art Gentleman avatar for the Pi / Gentle Shell TUI. Displays a reactive avatar that changes expression based on agent activity (thinking, talking, reading, writing, tool use, etc.).
 
+## Output commands and defaults
+
+All four output groups default to off independently; keep the extension's `enabled: true` to make commands available.
+
+| Output | Commands | Scope |
+|--------|----------|-------|
+| Terminal avatar | `/emote internalOn`, `/emote internalOff` | Terminal graphics/ASCII only |
+| Local simulators | `/emote debugOn`, `/emote debugOff` | Configured loopback targets |
+| Ulanzi D200 key | `/emote d200On`, `/emote d200Off` | Dedicated mirror at `127.0.0.1:8003` |
+| LED/ESP32 display | `/emote displayOn`, `/emote displayOff` | Configured non-loopback targets |
+
+Each command persists its boolean globally under `<agent dir>/extensions/gentle-emote/output-states/<output>.json`, independent of project configuration. The agent dir is `PI_CODING_AGENT_DIR`, or `~/.pi/agent`. Saved choices survive project changes, restarts and reloads; running sessions restore changes from other sessions at their next start/reload. Commands affect their current session immediately. They never rewrite `config.json`; debug/display delivery still requires valid enabled configured destinations. Tests must use temporary agent directories, never the real user profile. Malformed preferences fail closed with a warning; failed saves leave the current output unchanged.
+
 ## Configuration
 
 pi-emote uses layered configuration with deep merge. Higher-priority layers override lower ones field-by-field.
