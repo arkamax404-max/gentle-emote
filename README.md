@@ -11,7 +11,7 @@
 
 A pixel-art **Gentleman** that sits in a frame to the left of your prompt and acts out what the agent is doing. Works in [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell) and [Pi](https://pi.dev).
 
-He listens to local session events: no model calls or context. Networking is off by default; optional external-display mirroring sends only avatar images and visual metadata. Forked from [cgxeiji/pi-emote](https://github.com/cgxeiji/pi-emote).
+He listens to local session events: no model calls or context. Networking is off by default; optional external-display mirroring sends only avatar images and visual metadata. This fork builds on [efolchmontiel/gentle-emote](https://github.com/efolchmontiel/gentle-emote), originally forked from [cgxeiji/pi-emote](https://github.com/cgxeiji/pi-emote). It adds independent simulator/ESP32 delivery, activity labels, silhouette outlines, ASCII-terminal mirroring, and the editable `gentleled` image set.
 
 ## Scenes
 
@@ -126,13 +126,34 @@ With the sibling `emote-display-simulator` receiver running locally, add this to
 }
 ```
 
+To send to both the local simulator and a MatrixPortal receiver, replace the single `url` with `targets`:
+
+```json
+{
+  "externalDisplay": {
+    "enabled": true,
+    "timeoutMs": 1000,
+    "targets": [
+      { "enabled": true, "url": "http://127.0.0.1:8000/emote" },
+      { "enabled": true, "url": "http://gentle-matrix.local/emote" }
+    ]
+  }
+}
+```
+
+`targets`, when present, replaces the legacy `url` and is replaced as a whole by higher-priority config layers. Up to 8 destinations are allowed, each with its own queue, cache, timeout, stream ID and sequence. Target `timeoutMs` overrides the parent timeout. Turn off the simulator target with `enabled: false` when it is only needed for debugging. Use the board's LAN IP if mDNS does not resolve. The parent `enabled` switches all delivery off.
+
+Optional `background` accepts an RGB hex color (`"#000000"` by default). It composites genuinely transparent pixels only within the drawn sprite PNG bounds; outer canvas padding and the text area stay black. **opaque black pixels in sprites remain black**. Set `"background": "#404040"` on the parent to try a dim gray on both destinations, or on one target to override it independently. Invalid color values disable that destination. Very dark grays may quantize to black on low-bit-depth panels. Optional `backgroundCoverage` (0–1, default 1) applies a fixed 4×4 ordered dither to the transparency background only; `0.75` retains 75% gray pixels and uses black for the rest. Coverage has 1/16 increments and is inherited/overridden per target. This reduces apparent background brightness without temporal flicker or changing opaque artwork.
+
 Run `/reload`, open the simulator in your browser, then `/emote demo`. Set `enabled` to `false` and reload to stop. Shutdown/reload aborts delivery and discards pending frames.
 
 - **Trust:** project config can enable outbound requests and override the destination through the normal layered merge. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
 - **Options:** disabled by default; URL defaults to empty (no implicit destination). `timeoutMs` defaults to `1000` and must be finite between `1` and `30000` inclusive. Invalid options safely disable networking without disabling the local avatar.
-- **Image:** raw binary PNG, exactly 64×64, opaque black background. Post-accent sprites are centered without enlargement; oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared sprites.
-- **Delivery:** one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
-- **Scope:** image renderers only (including Kitty Unicode placeholders). ASCII and headless sessions do not mirror. Hidden terminal widgets may still select frames; this is not a separate headless animation engine.
+- **Image:** raw binary PNG, exactly 64×64, opaque black canvas with configurable transparency background inside the sprite bounds (black by default). Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared sprites.
+- **Delivery:** per destination, one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set + activity selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
+- **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. Both destinations still receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine.
+
+Optional `outline: "#ffffff"` adds a one-pixel external white silhouette to display PNGs only (not terminal art or text labels). It can be inherited from the parent or overridden per target. Transparent sprites use their alpha mask; fully opaque sprites such as the shipped set treat pure black as background. Only background connected to the outside is outlined, so enclosed holes stay untouched. Black artwork touching the external black matte cannot be distinguished from it. The outline may extend one pixel outside the sprite bounds; pixels at the top canvas edge are clipped. Omit the option to disable it.
 
 ### Receiver protocol v1
 
@@ -142,12 +163,17 @@ Run `/reload`, open the simulator in your browser, then `/emote demo`. Set `enab
 |--------|-------|
 | `X-Emote-Version` | `1` |
 | `X-Emote-State` | Selected state, e.g. `think` |
+| `X-Emote-Status` | `idle`, `busy`, or `error` (agent activity, independent of animation) |
+| `X-Emote-Phase` | `idle`, `thinking`, `responding`, `executing`, `waiting`, or `compacting` |
+| `X-Emote-Active-Subagents` | Nonnegative count of observed in-flight subagent tool calls |
 | `X-Emote-Frame` | Selected filename, e.g. `think.png` |
 | `X-Emote-Set` | Actual set directory basename, never its path |
 | `X-Emote-Stream-Id` | Random UUID per sender lifetime |
 | `X-Emote-Sequence` | Increasing positive integer (1–20 digits), assigned per request |
 
-Identifiers must match `[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}`. Unsupported custom names are skipped and reported without affecting local rendering. Delivery/configuration errors are reported as warnings; diagnostics never include payloads or the destination URL.
+Activity-only changes regenerate the PNG labels and resend it, even when the sprite has not changed. These additive v1 headers contain no reasoning text or tool arguments. Subagent counts track `subagent_run/continue/reply` calls (including MCP-prefixed names), not detached background jobs after a call returns; counts reset at agent boundaries. The receiver can display the PNG directly without drawing status/phase text itself. Counts above 999 display as `(999+)`; the header retains the exact count. Older receivers can ignore these headers.
+
+Identifiers must match `[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}`. Unsupported custom names are skipped and reported without affecting local rendering. Delivery failures, timeouts and HTTP rejections are silent in the UI and logged only when `debug` is enabled. Configuration and unsupported-identifier errors still produce warnings. Diagnostics never include payloads or the destination URL.
 
 ## Create your own avatar
 

@@ -17,11 +17,13 @@ import { KittyUnicodeRenderer } from "./render_kitty_unicode.ts";
 import { ITermRenderer } from "./render_iterm.ts";
 import { TmuxITermRenderer } from "./render_tmux_iterm.ts";
 import { AsciiRenderer } from "./render_ascii.ts";
+import { MirroredAsciiRenderer } from "./render_ascii_mirror.ts";
 import { Animator } from "./animator.ts";
 import { createWidgetFactory } from "./widget.ts";
 import { resolveRenderer } from "./terminal.ts";
 import { readYoloRest } from "./yolo.ts";
-import { ExternalDisplay } from "./external_display.ts";
+import { ExternalDisplays } from "./external_display.ts";
+import { DisplayActivityTracker } from "./display_activity.ts";
 
 const WIDGET_KEY = "gentle-emote";
 const BANNER_POLL_MS = 2000;
@@ -138,7 +140,7 @@ function createRendererFromResolved(resolved: ResolvedRenderer, config: Config):
     return inTmux ? new TmuxITermRenderer(size) : new ITermRenderer(size);
   }
   log(`createRenderer: using AsciiRenderer`);
-  return new AsciiRenderer();
+  return new MirroredAsciiRenderer();
 }
 
 const sameRgb = (a: Rgb, b: Rgb) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
@@ -153,7 +155,8 @@ export default function (pi: ExtensionAPI) {
 
   if (!config.enabled) return;
 
-  let externalDisplay: ExternalDisplay | null = null;
+  let externalDisplay: ExternalDisplays | null = null;
+  const displayActivity = new DisplayActivityTracker(activity => externalDisplay?.updateActivity(activity));
   let currentEmoteSet = "gentleman";
   let widgetActive = false;
   let lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
@@ -181,7 +184,7 @@ export default function (pi: ExtensionAPI) {
 
     if (isAsciiOnly) {
       if (!(renderer instanceof AsciiRenderer)) {
-        renderer = new AsciiRenderer();
+        renderer = new MirroredAsciiRenderer();
         animator.setRenderer(renderer);
       }
     } else {
@@ -192,7 +195,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    renderer.setFrameSink?.(externalDisplay ? (image) => externalDisplay?.select(image) : null);
+    renderer.setFrameSink?.(externalDisplay?.enabled ? (image) => externalDisplay?.select(image) : null);
     renderer.loadFrames(setDir, extDir, createAccentTransform(accent));
     animator.setEmotesConfig(loadEmotesConfig(setDir));
   }
@@ -394,7 +397,8 @@ export default function (pi: ExtensionAPI) {
     if (!config.enabled) return;
 
     externalDisplay?.dispose();
-    externalDisplay = new ExternalDisplay(config.externalDisplay, fetch, (message) => ctx.ui.notify(`[${EXTENSION_NAME}] ${message}`, "warning"));
+    externalDisplay = new ExternalDisplays(config.externalDisplay, fetch, (message) => ctx.ui.notify(`[${EXTENSION_NAME}] ${message}`, "warning"));
+    displayActivity.reset();
     lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
     renderer = createRendererFromResolved(lastResolved, config);
     animator.setRenderer(renderer);
@@ -479,6 +483,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async () => {
+    displayActivity.reset();
+    displayActivity.set("busy", "thinking");
     clearPreview();
     runHadError = false;
     runUsedTools = false;
@@ -493,6 +499,7 @@ export default function (pi: ExtensionAPI) {
     if (!streamEvent) return;
 
     if (streamEvent.type === "thinking_start" || streamEvent.type === "thinking_delta") {
+      displayActivity.set("busy", "thinking");
       show("think");
       return;
     }
@@ -506,19 +513,23 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (streamEvent.type !== "text_delta" || !streamEvent.delta) return;
+    displayActivity.set("busy", "responding");
     show("talk");
     animator.onTalkToken(streamEvent.delta);
   });
 
   pi.on("tool_execution_start", async (event) => {
     if (!widgetActive) return;
+    displayActivity.toolStart(event.toolName, event.toolCallId);
     runUsedTools = true;
     if (FAREWELL_TOOLS.has(event.toolName)) startFarewell();
     else show(toolNameToState(event.toolName, event.args));
   });
 
   pi.on("tool_execution_end", async (event) => {
-    if (!widgetActive || farewell) return;
+    if (!widgetActive) return;
+    displayActivity.toolEnd(event.toolCallId, event.isError);
+    if (farewell) return;
     if (event.isError) {
       runHadError = true;
       animator.setHoldNextState("think");
@@ -531,23 +542,28 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("ui_prompt_start", async () => {
     if (!widgetActive) return;
+    displayActivity.set("busy", "waiting");
     animator.beginPrompt();
   });
 
   pi.on("ui_prompt_end", async () => {
     if (!widgetActive) return;
+    displayActivity.set("busy", "executing");
     animator.endPrompt();
   });
 
   const stopBlocked = pi.events?.on?.(HERDR_BLOCKED, (data: unknown) => {
     if (!widgetActive) return;
     const active = !!data && typeof data === "object" && (data as { active?: unknown }).active === true;
+    displayActivity.set("busy", active ? "waiting" : "executing");
     if (active) animator.beginPrompt();
     else animator.endPrompt();
   });
 
   pi.on("agent_end", async () => {
     if (!widgetActive) return;
+    displayActivity.reset();
+    if (runHadError) displayActivity.set("error", "idle");
     if (farewell) {
       endFarewellLater();
       return;
@@ -562,10 +578,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_before_compact", async () => {
+    displayActivity.set("busy", "compacting");
     show("compact");
   });
 
   pi.on("session_compact", async () => {
+    displayActivity.reset();
     show("idle");
   });
 }

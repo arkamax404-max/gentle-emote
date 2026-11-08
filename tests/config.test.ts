@@ -24,6 +24,11 @@ test("external display defaults off, layered fields merge, existing size and ter
     assert.equal(config.size, 14);
     assert.equal(config.terminals.find(entry => entry.match === "tmux")?.render, "ascii");
     assert.ok(userConfiguredTerminals.has("tmux"));
+    const simulator = { enabled: true, url: "http://127.0.0.1:8000/emote" };
+    const device = { enabled: true, url: "http://gentle-matrix.local/emote", timeoutMs: 750 };
+    writeFileSync(join(userConfig, "config.json"), JSON.stringify({ externalDisplay: { targets: [simulator, device] } }));
+    writeFileSync(join(localConfig, "config.json"), JSON.stringify({ externalDisplay: { targets: [device] } }));
+    assert.deepEqual(loadLayeredConfig(ext, project).config.externalDisplay.targets, [device], "project array replaces user destinations");
     writeFileSync(join(localConfig, "config.json"), JSON.stringify({ externalDisplay: null }));
     const invalid = loadLayeredConfig(ext, project).config;
     assert.equal(normalizeExternalDisplay(invalid.externalDisplay), null);

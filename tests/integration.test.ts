@@ -89,6 +89,51 @@ test("session wiring mirrors image selections and prompt overlays, shutdown stop
   }
 });
 
+test("ASCII-only terminal still POSTs animated PNGs, prompt overlays and model set changes", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const root = mkdtempSync(join(tmpdir(), "emote-ascii-session-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({
+    externalDisplay: { enabled: true, targets: [
+      { enabled: true, url: "http://localhost:8000/emote" },
+      { enabled: true, url: "http://matrix/emote" },
+    ] },
+    terminals: [{ match: "ghostty", render: "ascii" }], cycleMs: 15,
+    emotes: [{ model: "next", "emote-set": "gentleman-yolo" }],
+  }));
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init: init! }); return new Response(); };
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+  try {
+    lab = await boot(root);
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "read-1" });
+    t.mock.timers.tick(450);
+    await tick();
+    const readCalls = calls.filter(call => new Headers(call.init.headers).get("X-Emote-State") === "read");
+    assert.ok(new Set(readCalls.map(call => new Headers(call.init.headers).get("X-Emote-Frame"))).size > 1);
+    assert.ok(readCalls.some(call => call.url.includes("localhost")) && readCalls.some(call => call.url.includes("matrix")));
+    lab.widgets.render(100); // Install the text gutter before rendering the editor.
+    assert.ok(lab.editor.render(100).join("\n").includes(".------."), "local output remains ASCII");
+    assert.ok(!lab.writes.some(write => write.includes("\x1b_G") || write.includes("1337;File=")), "no image protocol writes");
+    await lab.emit("ui_prompt_start"); await tick();
+    assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-State"), "ask");
+    await lab.emit("ui_prompt_end"); await tick();
+    assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-State"), "read");
+    await lab.emit("model_select", { model: { id: "next" } }); await tick();
+    assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-Set"), "gentleman-yolo");
+    await lab.shutdown();
+    const count = calls.length;
+    await lab.emit("tool_execution_start", { toolName: "write" }); await tick();
+    assert.equal(calls.length, count);
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the framed avatar sits beside the prompt, which grows to the frame height", async () => {
   const lab = await boot();
   try {

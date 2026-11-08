@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ExternalDisplay, normalizeExternalDisplay } from "../src/external_display.ts";
+import { ExternalDisplay, ExternalDisplays, normalizeExternalDisplay } from "../src/external_display.ts";
 import { encodePng, decodePng } from "../src/png.ts";
 import { ITermRenderer } from "../src/render_iterm.ts";
 import { KittyUnicodeRenderer } from "../src/render_kitty_unicode.ts";
@@ -50,6 +50,90 @@ for (const renderer of [new ITermRenderer(10), new KittyUnicodeRenderer(10, fals
   });
 }
 
+test("multiple destinations deliver independently when one is stalled or fails", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  let release: (() => void) | undefined;
+  const sender = new ExternalDisplays({ enabled: true, timeoutMs: 1000, targets: [
+    { enabled: true, url: "http://localhost:8000/emote" },
+    { enabled: true, url: "http://gentle-matrix.local/emote", timeoutMs: 500 },
+    { enabled: false, url: "http://disabled/emote" },
+  ] }, async (url, init) => {
+    calls.push({ url: String(url), init: init! });
+    if (String(url).includes("localhost")) return new Promise(resolve => { release = () => resolve(new Response()); });
+    return new Response(null, { status: 503 });
+  });
+  try {
+    sender.select(frame()); await tick();
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 2 }); await tick();
+    assert.equal(calls.filter(call => call.url.includes("localhost")).length, 1);
+    const device = calls.filter(call => call.url.includes("gentle-matrix"));
+    assert.equal(device.length, 2, "device keeps delivering while simulator is stalled");
+    assert.equal(new Headers(device[1]!.init.headers).get("X-Emote-Active-Subagents"), "2");
+    assert.ok(calls.every(call => !call.url.includes("disabled")));
+    sender.dispose();
+    assert.ok(calls.every(call => call.init.signal!.aborted || call.url.includes("gentle-matrix")));
+    release?.(); await tick();
+    sender.select(frame("after.png")); assert.equal(calls.length, 3);
+  } finally { sender.dispose(); release?.(); }
+});
+
+test("multi-destination configuration preserves legacy and safely disables invalid targets", async () => {
+  const calls: string[] = [];
+  const fetcher: typeof fetch = async (url) => { calls.push(String(url)); return new Response(); };
+  for (const input of [
+    { ...options, enabled: false, targets: [{ ...options }] },
+    { ...options, targets: [] },
+    { ...options, targets: "invalid" },
+    { ...options, targets: Array(9).fill(options) },
+  ]) {
+    const group = new ExternalDisplays(input, fetcher);
+    group.select(frame()); await tick(); group.dispose();
+  }
+  assert.deepEqual(calls, []);
+  const group = new ExternalDisplays(options, fetcher);
+  group.select(frame()); await tick(); group.dispose();
+  assert.deepEqual(calls, [options.url]);
+});
+
+test("background inherits per target, overrides independently, and rejects invalid colors", async () => {
+  for (const background of [null, 123, "gray", "#fff", "#000000\r\n"]) {
+    assert.equal(normalizeExternalDisplay({ ...options, background }), null);
+  }
+  for (const backgroundCoverage of [NaN, Infinity, -1, 1.1, "0.75", null]) {
+    assert.equal(normalizeExternalDisplay({ ...options, backgroundCoverage }), null);
+  }
+  const calls: RequestInit[] = [];
+  const group = new ExternalDisplays({ ...options, background: "#404040", targets: [
+    { ...options }, { ...options, background: "#000000" },
+  ] }, async (_url, init) => { calls.push(init!); return new Response(); });
+  try {
+    const transparent = encodePng({ width: 1, height: 1, data: new Uint8Array(4) }).toString("base64");
+    group.select({ ...frame(), base64: transparent }); await tick();
+    assert.equal(calls.length, 2);
+    const center = (19 * 64 + 31) * 4;
+    const images = calls.map(call => decodePng(Buffer.from(call.body as Uint8Array)));
+    assert.deepEqual([...images[0]!.data.slice(center, center + 4)], [64, 64, 64, 255]);
+    assert.deepEqual([...images[1]!.data.slice(center, center + 4)], [0, 0, 0, 255]);
+    for (const image of images) assert.deepEqual([...image.data.slice(0, 4)], [0, 0, 0, 255]);
+  } finally { group.dispose(); }
+});
+
+test("outline inherits per destination and rejects invalid colors", async () => {
+  for (const outline of [null, 123, "white", "#fff"]) assert.equal(normalizeExternalDisplay({ ...options, outline }), null);
+  const calls: RequestInit[] = [];
+  const sender = new ExternalDisplays({ ...options, outline: "#ffffff", targets: [
+    { ...options }, { ...options, outline: "#000000" },
+  ] }, async (_url, init) => { calls.push(init!); return new Response(); });
+  try {
+    sender.select(frame()); await tick();
+    assert.equal(calls.length, 2);
+    const index = (18 * 64 + 30) * 4;
+    const images = calls.map(call => decodePng(Buffer.from(call.body as Uint8Array)));
+    assert.deepEqual([...images[0]!.data.slice(index, index + 4)], [255, 255, 255, 255]);
+    assert.deepEqual([...images[1]!.data.slice(index, index + 4)], [0, 0, 0, 255]);
+  } finally { sender.dispose(); }
+});
+
 test("disabled and invalid configuration make zero calls; timeout defaults and boundaries", () => {
   let calls = 0;
   for (const input of [undefined, null, {}, { ...options, enabled: false }, { ...options, enabled: "true" }, { ...options, url: "ftp://host" }, { ...options, url: "relative" }, { ...options, url: "http://user:pass@host" }, ...[NaN, Infinity, 0, -1, 30001, "1000"].map(timeoutMs => ({ ...options, timeoutMs }))]) {
@@ -98,6 +182,31 @@ test("raw PNG protocol, image+metadata dedup, bounded latest pending, invalid ID
   sender.dispose(); done.shift()!(); await tick(); assert.equal(calls.length, 3);
 });
 
+test("activity-only updates resend unchanged sprites and snapshot the latest pending metadata", async () => {
+  const calls: RequestInit[] = [];
+  const done: Array<() => void> = [];
+  const sender = new ExternalDisplay(options, async (_url, init) => {
+    calls.push(init!);
+    return new Promise(resolve => done.push(() => resolve(new Response())));
+  });
+  try {
+    sender.select(frame());
+    sender.updateActivity({ status: "busy", phase: "thinking", activeSubagents: 0 });
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 2 });
+    assert.equal(calls.length, 1);
+    assert.equal(new Headers(calls[0]!.headers).get("X-Emote-Phase"), "idle");
+    done.shift()!(); await tick();
+    const headers = new Headers(calls[1]!.headers);
+    assert.equal(headers.get("X-Emote-Status"), "busy");
+    assert.equal(headers.get("X-Emote-Phase"), "executing");
+    assert.equal(headers.get("X-Emote-Active-Subagents"), "2");
+    assert.notDeepEqual(calls[0]!.body, calls[1]!.body, "activity labels change the delivered PNG");
+    done.shift()!(); await tick();
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 2 });
+    assert.equal(calls.length, 2);
+  } finally { sender.dispose(); }
+});
+
 test("dedup identity includes post-accent image and set, streams are per sender", async () => {
   const calls: RequestInit[] = [];
   const fetcher: typeof fetch = async (_url, init) => { calls.push(init!); return new Response(); };
@@ -114,6 +223,29 @@ test("dedup identity includes post-accent image and set, streams are per sender"
     assert.notEqual(new Headers(calls[0]!.headers).get("X-Emote-Stream-Id"), new Headers(calls[3]!.headers).get("X-Emote-Stream-Id"));
     assert.equal(new Headers(calls[3]!.headers).get("X-Emote-Sequence"), "1");
   } finally { sender.dispose(); other.dispose(); }
+});
+
+test("unreachable receivers, timeouts and HTTP errors never produce UI warnings", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const warnings: string[] = [];
+  for (const fetcher of [
+    () => { throw Error("connection refused"); },
+    async () => { throw Error("DNS resolution failed"); },
+    async () => new Response(null, { status: 503 }),
+  ]) {
+    const sender = new ExternalDisplay(options, fetcher, message => warnings.push(message));
+    sender.select(frame()); await tick(); sender.dispose();
+  }
+  const stalled = new ExternalDisplay({ ...options, timeoutMs: 5 }, async (_url, init) => new Promise((_resolve, reject) => {
+    init!.signal!.addEventListener("abort", () => reject(Error("timeout")));
+  }), message => warnings.push(message));
+  try {
+    stalled.select(frame()); t.mock.timers.tick(5); await tick();
+    assert.deepEqual(warnings, []);
+    const invalid = new ExternalDisplay({ ...options, url: "invalid" }, fetch, message => warnings.push(message));
+    assert.equal(warnings.length, 1, "configuration errors remain visible");
+    invalid.dispose();
+  } finally { stalled.dispose(); }
 });
 
 test("failures never escape; timeout aborts; disposal aborts and drops pending", async (t) => {

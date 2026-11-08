@@ -342,7 +342,7 @@ export class AsciiRenderer implements Renderer {
     if (!frameSet || frameSet.names.length === 0) return false;
     // Exclude "close" from random talk frames
     const candidates = frameSet.names.filter((n) => n !== "close");
-    if (candidates.length === 0) return this.showRandomFrame("talk");
+    if (candidates.length === 0) return this.show(frameSet.named.get(frameSet.names[0]!)!);
     const name = randomPick(candidates);
     return this.show(frameSet.named.get(name)!);
   }

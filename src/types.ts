@@ -17,6 +17,14 @@ export interface ExternalDisplayConfig {
   enabled: boolean;
   url: string;
   timeoutMs: number;
+  /** RGB background used when composing the opaque display PNG. */
+  background?: string;
+  /** Static background pixel coverage (0–1); avoids temporal flicker. */
+  backgroundCoverage?: number;
+  /** Optional one-pixel external silhouette color. */
+  outline?: string;
+  /** When present, replaces the legacy single URL with independent destinations. */
+  targets?: Array<{ enabled: boolean; url: string; timeoutMs?: number; background?: string; backgroundCoverage?: number; outline?: string }>;
 }
 
 export interface Config {

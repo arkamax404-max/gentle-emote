@@ -20,6 +20,7 @@ export type RenderedFrame =
  * Implementations:
  * - ImageRenderer (render_image.ts): Kitty/iTerm2 image protocols
  * - AsciiRenderer (render_ascii.ts): plain text fallback
+ * - MirroredAsciiRenderer (render_ascii_mirror.ts): local ASCII + PNG selections for POST
  */
 export interface Renderer {
   /** Observe selected post-accent sprites independently of terminal repaint caching. */
