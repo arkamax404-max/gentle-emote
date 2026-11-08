@@ -122,12 +122,79 @@ test("ASCII-only terminal still POSTs animated PNGs, prompt overlays and model s
     assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-State"), "ask");
     await lab.emit("ui_prompt_end"); await tick();
     assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-State"), "read");
+    const command = lab.commands.get("emote");
+    await command.handler("internalOff", lab.ctx); await tick();
+    lab.widgets.render(100);
+    assert.ok(!lab.editor.render(100).join("\n").includes(".------."));
     await lab.emit("model_select", { model: { id: "next" } }); await tick();
     assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-Set"), "gentleman-yolo");
+    await command.handler("internalOn", lab.ctx); await tick();
+    lab.widgets.render(100);
+    assert.ok(lab.editor.render(100).join("\n").includes(".------."), "ASCII avatar is restored");
     await lab.shutdown();
     const count = calls.length;
     await lab.emit("tool_execution_start", { toolName: "write" }); await tick();
     assert.equal(calls.length, count);
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("internalOff removes the terminal avatar but preserves PNG POSTs and internalOn restores it", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const root = mkdtempSync(join(tmpdir(), "emote-visibility-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({
+    externalDisplay: { enabled: true, targets: [
+      { enabled: true, url: "http://localhost:8000/emote" },
+      { enabled: true, url: "http://matrix/emote" },
+    ] },
+  }));
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init: init! }); return new Response(); };
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  const tick = () => new Promise<void>(resolve => setImmediate(resolve));
+  try {
+    lab = await boot(root);
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "r" }); await tick();
+    lab.widgets.render(100);
+    assert.ok(lab.editor.render(100).join("\n").includes(PLACEHOLDER));
+    const command = lab.commands.get("emote");
+    assert.deepEqual(command.getArgumentCompletions("internal").map((item: any) => item.value), ["internalOn", "internalOff"]);
+    await command.handler("internalOff", lab.ctx); await tick();
+    assert.deepEqual(lab.widgets.render(100), []);
+    assert.ok(!lab.editor.render(100).join("\n").includes(PLACEHOLDER), "gutter is removed");
+    const writes = lab.writes.length;
+    const start = calls.length;
+    await lab.emit("tool_execution_start", { toolName: "write", toolCallId: "w" });
+    t.mock.timers.tick(240); await tick();
+    const hidden = calls.slice(start).filter(call => new Headers(call.init.headers).get("X-Emote-State") === "write");
+    assert.ok(hidden.some(call => call.url.includes("localhost")) && hidden.some(call => call.url.includes("matrix")));
+    assert.ok(new Set(hidden.map(call => new Headers(call.init.headers).get("X-Emote-Frame"))).size > 1);
+    await lab.emit("ui_prompt_start"); await tick();
+    assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-State"), "ask");
+    await lab.emit("ui_prompt_end"); await tick();
+    await command.handler("internalOff", lab.ctx); // Idempotent.
+    assert.equal(lab.writes.length, writes, "no terminal graphics are transmitted while hidden");
+    assert.deepEqual(command.getArgumentCompletions("debug").map((item: any) => item.value), ["debugOn", "debugOff"]);
+    const localBefore = calls.filter(call => call.url.includes("localhost")).length;
+    const deviceBefore = calls.filter(call => call.url.includes("matrix")).length;
+    await command.handler("debugOff", lab.ctx);
+    await lab.emit("tool_execution_start", { toolName: "bash", toolCallId: "b" }); await tick();
+    assert.equal(calls.filter(call => call.url.includes("localhost")).length, localBefore);
+    const deviceAfter = calls.filter(call => call.url.includes("matrix")).length;
+    assert.ok(deviceAfter > deviceBefore, "ESP32 keeps updating with both local outputs off");
+    await command.handler("debugOn", lab.ctx); await tick();
+    assert.equal(calls.filter(call => call.url.includes("localhost")).length, localBefore + 1);
+    assert.equal(calls.filter(call => call.url.includes("matrix")).length, deviceAfter, "ESP32 stream is untouched by debugOn");
+    assert.equal(lab.writes.length, writes, "debug commands do not show the internal avatar");
+    await command.handler("internalOn", lab.ctx); await tick();
+    lab.widgets.render(100);
+    assert.ok(lab.editor.render(100).join("\n").includes(PLACEHOLDER));
+    assert.ok(lab.writes.length > writes, "graphics resume when re-enabled");
   } finally {
     await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
     rmSync(root, { recursive: true, force: true });

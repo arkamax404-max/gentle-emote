@@ -28,6 +28,14 @@ export function normalizeExternalDisplay(value: unknown): ExternalDisplayConfig 
   } catch { return null; }
 }
 
+/** Match configured loopback destinations, never arbitrary LAN hosts or substrings. */
+export function isLoopbackDisplayUrl(url: string): boolean {
+  try {
+    const host = new URL(url).hostname.toLowerCase().replace(/\.$/, "");
+    return host === "localhost" || host.endsWith(".localhost") || host === "[::1]" || /^127\.\d+\.\d+\.\d+$/.test(host);
+  } catch { return false; }
+}
+
 /** Independent queues, timeouts and caches per destination; legacy URL stays supported. */
 export class ExternalDisplays {
   private displays: ExternalDisplay[] = [];
@@ -53,6 +61,17 @@ export class ExternalDisplays {
 
   get enabled(): boolean { return this.displays.some(display => display.enabled); }
 
+  /** Pause only configured loopback destinations; never enables disabled config. */
+  setDebugEnabled(enabled: boolean): number {
+    let count = 0;
+    for (const display of this.displays) {
+      if (!display.local) continue;
+      display.setPaused(!enabled);
+      count++;
+    }
+    return count;
+  }
+
   select(image: SelectedImage): void { for (const display of this.displays) display.select(image); }
   updateActivity(activity: DisplayActivity): void { for (const display of this.displays) display.updateActivity(activity); }
   dispose(): void { for (const display of this.displays) display.dispose(); this.displays = []; }
@@ -64,6 +83,7 @@ export class ExternalDisplay {
   private streamId = randomUUID();
   private sequence = 0n;
   private disposed = false;
+  private paused = false;
   private active: AbortController | null = null;
   private pending: Selection | null = null;
   private selected: SelectedImage | null = null;
@@ -85,6 +105,22 @@ export class ExternalDisplay {
 
   get enabled(): boolean { return !!this.options && !this.disposed; }
 
+  get local(): boolean { return !!this.options && isLoopbackDisplayUrl(this.options.url); }
+
+  setPaused(paused: boolean): void {
+    if (this.disposed || paused === this.paused) return;
+    this.paused = paused;
+    this.lastKey = "";
+    if (paused) {
+      this.pending = null;
+      if (this.timer) clearTimeout(this.timer);
+      this.timer = null;
+      this.active?.abort();
+    } else if (this.selected) {
+      this.select(this.selected);
+    }
+  }
+
   private warn(message: string) { try { this.report(message); } catch { /* sink diagnostics cannot break UI */ } }
 
   private deliveryDiagnostic(message: string): void {
@@ -104,6 +140,7 @@ export class ExternalDisplay {
         this.warn("externalDisplay: unsupported frame identifier; skipped"); return;
       }
       this.selected = { ...image };
+      if (this.paused) return; // Keep the latest selection for debugOn, without sending.
       const key = JSON.stringify([image.base64, image.state, image.frame, image.set, this.activity]);
       if (key === this.lastKey) return;
       this.lastKey = key;
@@ -114,7 +151,7 @@ export class ExternalDisplay {
 
   private async drain(): Promise<void> {
     const image = this.pending;
-    if (!image || !this.options || this.disposed) return;
+    if (!image || !this.options || this.disposed || this.paused) return;
     this.pending = null;
     const controller = new AbortController();
     this.active = controller;

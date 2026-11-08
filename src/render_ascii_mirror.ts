@@ -6,7 +6,7 @@ import type { EmoteState, EmotesConfig, FrameTransform } from "./types.ts";
 import type { FrameSink } from "./external_display.ts";
 
 /** Reuses PNG selection without encoding, writing or repainting terminal images. */
-class ImageFrameSelector extends BaseImageRenderer {
+export class PngSelectionRenderer extends BaseImageRenderer {
   protected cursorAdvances = false;
   constructor() { super(1); }
   protected encode(): null { return null; }
@@ -16,7 +16,7 @@ class ImageFrameSelector extends BaseImageRenderer {
 
 /** PNG animation drives the external display; the terminal remains text-only. */
 export class MirroredAsciiRenderer extends AsciiRenderer {
-  private images = new ImageFrameSelector();
+  private images = new PngSelectionRenderer();
   private mirroring = false;
 
   setFrameSink(sink: FrameSink | null) {

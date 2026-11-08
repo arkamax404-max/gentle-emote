@@ -17,7 +17,7 @@ import { KittyUnicodeRenderer } from "./render_kitty_unicode.ts";
 import { ITermRenderer } from "./render_iterm.ts";
 import { TmuxITermRenderer } from "./render_tmux_iterm.ts";
 import { AsciiRenderer } from "./render_ascii.ts";
-import { MirroredAsciiRenderer } from "./render_ascii_mirror.ts";
+import { MirroredAsciiRenderer, PngSelectionRenderer } from "./render_ascii_mirror.ts";
 import { Animator } from "./animator.ts";
 import { createWidgetFactory } from "./widget.ts";
 import { resolveRenderer } from "./terminal.ts";
@@ -81,6 +81,10 @@ const EMOTE_DESCRIPTIONS: Record<string, string> = {
   review: "red pen on a page, robot holds the review sign (review-* subagents)",
   jira: "launches a rocket into a cloud (jira subagents)",
   demo: "plays every state in a row",
+  internalOn: "show the terminal avatar (external delivery stays active)",
+  internalOff: "hide the terminal avatar (external delivery stays active)",
+  debugOn: "resume delivery to configured localhost simulators",
+  debugOff: "pause localhost delivery without affecting the ESP32",
 };
 
 /** Check if a set directory contains any image frames (PNG files in state subdirs). */
@@ -159,6 +163,7 @@ export default function (pi: ExtensionAPI) {
   const displayActivity = new DisplayActivityTracker(activity => externalDisplay?.updateActivity(activity));
   let currentEmoteSet = "gentleman";
   let widgetActive = false;
+  let internalVisible = true;
   let lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
   let renderer = createRendererFromResolved(lastResolved, config);
   let accent = resolveAccent(config.accent);
@@ -182,22 +187,31 @@ export default function (pi: ExtensionAPI) {
     const setDir = (yoloOn && findYoloSetDir(setName, extDir, cwd)) || findEmoteSetDir(setName, extDir, cwd);
     const isAsciiOnly = existsSync(join(setDir, "ascii.yaml")) && !hasImageFrames(setDir);
 
-    if (isAsciiOnly) {
+    if (!internalVisible) {
+      if (!(renderer instanceof PngSelectionRenderer)) {
+        renderer.dispose();
+        renderer = new PngSelectionRenderer();
+        animator.setRenderer(renderer);
+      }
+    } else if (isAsciiOnly) {
       if (!(renderer instanceof AsciiRenderer)) {
+        renderer.dispose();
         renderer = new MirroredAsciiRenderer();
         animator.setRenderer(renderer);
       }
     } else {
       const detected = createRendererFromResolved(lastResolved, config);
       if (renderer.constructor !== detected.constructor) {
+        renderer.dispose();
         renderer = detected;
         animator.setRenderer(renderer);
       }
     }
 
     renderer.setFrameSink?.(externalDisplay?.enabled ? (image) => externalDisplay?.select(image) : null);
-    renderer.loadFrames(setDir, extDir, createAccentTransform(accent));
-    animator.setEmotesConfig(loadEmotesConfig(setDir));
+    const framesDir = !internalVisible && isAsciiOnly ? join(extDir, "emotes", "gentleman") : setDir;
+    renderer.loadFrames(framesDir, extDir, createAccentTransform(accent));
+    animator.setEmotesConfig(loadEmotesConfig(framesDir));
   }
 
   /** Re-show the current state after frames were reloaded. */
@@ -322,7 +336,18 @@ export default function (pi: ExtensionAPI) {
     if (animator.currentState !== state) animator.transitionTo(state);
   }
 
-  // --- /emote previews (no model involved) ---
+  function installWidget(ctx: any) {
+    ctx.ui.setWidget(WIDGET_KEY, createWidgetFactory({
+      animator,
+      config,
+      getCurrentEmoteSet: () => currentEmoteSet,
+      setFrameColor: (color) => {
+        if (renderer instanceof KittyUnicodeRenderer) renderer.setFrameColor(color);
+      },
+    }), { placement: "aboveEditor" });
+  }
+
+  // --- /emote previews and local visibility (no model involved) ---
 
   function clearPreview() {
     if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
@@ -358,15 +383,29 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.registerCommand?.("emote", {
-    description: "Preview a gentle-emote state: /emote <state> | demo",
+    description: "Gentle-emote: /emote <state> | demo | internalOn | internalOff | debugOn | debugOff",
     getArgumentCompletions: (prefix: string) =>
-      [...EMOTE_STATES, "demo"]
+      [...EMOTE_STATES, "demo", "internalOn", "internalOff", "debugOn", "debugOff"]
         .filter((name) => name.startsWith(prefix.trim()))
         .map((name) => ({ value: name, label: name, description: EMOTE_DESCRIPTIONS[name] })),
     handler: async (args: string, ctx: any) => {
       const name = args.trim();
       if (!widgetActive) {
         ctx.ui?.notify?.(`[${EXTENSION_NAME}] avatar inactive (no UI or disabled)`, "warning");
+        return;
+      }
+      if (name === "debugOn" || name === "debugOff") {
+        const count = externalDisplay?.setDebugEnabled(name === "debugOn") ?? 0;
+        if (!count) ctx.ui?.notify?.(`[${EXTENSION_NAME}] no enabled localhost display configured`, "info");
+        return;
+      }
+      if (name === "internalOn" || name === "internalOff") {
+        const visible = name === "internalOn";
+        if (visible === internalVisible) return;
+        internalVisible = visible;
+        loadEmoteSet(currentEmoteSet);
+        installWidget(ctx);
+        refreshCurrentFrame();
         return;
       }
       if (name === "demo") {
@@ -377,7 +416,7 @@ export default function (pi: ExtensionAPI) {
         previewState(name as EmoteState);
         return;
       }
-      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo"].join(", ")}`, "info");
+      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo", "internalOn", "internalOff", "debugOn", "debugOff"].join(", ")}`, "info");
     },
   });
 
@@ -416,14 +455,7 @@ export default function (pi: ExtensionAPI) {
     loadEmoteSet(setName);
     watchBanner();
 
-    ctx.ui.setWidget(WIDGET_KEY, createWidgetFactory({
-      animator,
-      config,
-      getCurrentEmoteSet: () => currentEmoteSet,
-      setFrameColor: (color) => {
-        if (renderer instanceof KittyUnicodeRenderer) renderer.setFrameColor(color);
-      },
-    }), { placement: "aboveEditor" });
+    installWidget(ctx);
 
     stopTerminalInput?.();
     stopTerminalInput = ctx.ui.onTerminalInput?.(() => {

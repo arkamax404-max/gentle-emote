@@ -78,6 +78,10 @@ Restart the session (or `/reload`) and the Gentleman says hi.
 | `/emote <state>` | Previews one state for a few seconds (tab-completes), e.g. `/emote delegate` |
 | `/emote demo` | Plays every state in sequence |
 | `/emote idle` | Stops a preview and goes back to rest |
+| `/emote internalOff` | Hides the terminal avatar and frees its prompt space; external PNG delivery continues |
+| `/emote internalOn` | Shows the terminal avatar again without disabling external delivery |
+| `/emote debugOff` | Pauses POSTs to configured localhost simulators; ESP32 delivery continues |
+| `/emote debugOn` | Resumes localhost delivery immediately with the latest PNG and activity |
 
 Any new prompt cancels a preview, so the avatar always follows the real agent.
 
@@ -111,6 +115,10 @@ Drop a `config.json` with only the keys you want to change in either place (the 
 | `terminals` | see `config.json` | Renderer per terminal (see below) |
 
 `config.json` in the package root has every default.
+
+`internalOn` / `internalOff` affect only the local avatar (graphics or ASCII), not the animation engine, activity tracking or external destinations. While hidden, no terminal image uploads occur. Visibility is runtime-only and resets to visible when the extension is reloaded; this is separate from `enabled: false`, which disables the extension.
+
+`debugOn` / `debugOff` control configured loopback destinations (`localhost`, `.localhost`, IPv4 127/8 and IPv6 `::1`), independently of internal visibility. `debugOff` aborts active local requests and discards their pending frames. `debugOn` resumes with the latest selection; the ESP32's queue, stream and sequence are untouched. These commands do not change diagnostic logging (`config.debug`), invent destinations or enable entries explicitly disabled in configuration. Reload restores delivery according to config.
 
 ## Mirror to an external 64×64 display
 

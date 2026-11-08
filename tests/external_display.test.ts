@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ExternalDisplay, ExternalDisplays, normalizeExternalDisplay } from "../src/external_display.ts";
+import { ExternalDisplay, ExternalDisplays, normalizeExternalDisplay, isLoopbackDisplayUrl } from "../src/external_display.ts";
 import { encodePng, decodePng } from "../src/png.ts";
 import { ITermRenderer } from "../src/render_iterm.ts";
 import { KittyUnicodeRenderer } from "../src/render_kitty_unicode.ts";
@@ -132,6 +132,65 @@ test("outline inherits per destination and rejects invalid colors", async () => 
     assert.deepEqual([...images[0]!.data.slice(index, index + 4)], [255, 255, 255, 255]);
     assert.deepEqual([...images[1]!.data.slice(index, index + 4)], [0, 0, 0, 255]);
   } finally { sender.dispose(); }
+});
+
+test("debug target detection matches only loopback hosts", () => {
+  for (const url of ["http://localhost:8000/emote", "http://localhost./emote", "http://sim.localhost/emote", "http://127.0.0.1/emote", "http://127.5.6.7/emote", "http://[::1]:8000/emote"]) assert.equal(isLoopbackDisplayUrl(url), true, url);
+  for (const url of ["invalid", "http://192.168.1.227/emote", "http://localhost.example/emote", "http://example.com/localhost", "http://gentle-matrix.local/emote"]) assert.equal(isLoopbackDisplayUrl(url), false, url);
+});
+
+test("debugOff pauses only localhost and debugOn sends the latest frame without resetting ESP32", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const sender = new ExternalDisplays({ ...options, targets: [options, { ...options, url: "http://matrix/emote" }] }, async (url, init) => {
+    calls.push({ url: String(url), init: init! }); return new Response();
+  });
+  const local = () => calls.filter(call => call.url === options.url);
+  const device = () => calls.filter(call => call.url.includes("matrix"));
+  try {
+    sender.select(frame()); await tick();
+    const stream = new Headers(device()[0]!.init.headers).get("X-Emote-Stream-Id");
+    assert.equal(sender.setDebugEnabled(false), 1);
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 2 });
+    sender.select(frame("latest.png")); await tick();
+    assert.equal(local().length, 1);
+    assert.ok(device().length > 1);
+    const deviceCount = device().length;
+    sender.setDebugEnabled(true); await tick();
+    assert.equal(local().length, 2);
+    const resumed = new Headers(local()[1]!.init.headers);
+    assert.equal(resumed.get("X-Emote-Frame"), "latest.png");
+    assert.equal(resumed.get("X-Emote-Active-Subagents"), "2");
+    assert.equal(resumed.get("X-Emote-Phase"), "executing");
+    assert.equal(resumed.get("X-Emote-Sequence"), "2");
+    assert.equal(device().length, deviceCount, "debugOn sends nothing extra to ESP32");
+    assert.ok(device().every(call => new Headers(call.init.headers).get("X-Emote-Stream-Id") === stream));
+    sender.setDebugEnabled(true); await tick();
+    assert.equal(local().length, 2, "repeated debugOn is idempotent");
+  } finally { sender.dispose(); }
+});
+
+test("debugOff aborts active local requests and drops pending frames; disabled config stays disabled", async () => {
+  const calls: RequestInit[] = [];
+  const sender = new ExternalDisplays(options, async (_url, init) => {
+    calls.push(init!);
+    if (calls.length === 1) return new Promise((_resolve, reject) => init!.signal!.addEventListener("abort", () => reject(Error("aborted"))));
+    return new Response();
+  });
+  try {
+    sender.select(frame()); sender.select(frame("discard.png"));
+    sender.setDebugEnabled(false);
+    assert.ok(calls[0]!.signal!.aborted);
+    sender.select(frame("latest.png"));
+    sender.setDebugEnabled(true); await tick();
+    assert.equal(calls.length, 2);
+    assert.equal(new Headers(calls[1]!.headers).get("X-Emote-Frame"), "latest.png");
+  } finally { sender.dispose(); }
+  for (const config of [{ ...options, enabled: false }, { ...options, targets: [{ ...options, enabled: false }] }]) {
+    const disabled = new ExternalDisplays(config, async () => { throw Error("must not fetch"); });
+    assert.equal(disabled.setDebugEnabled(true), 0);
+    assert.equal(disabled.enabled, false);
+    disabled.dispose();
+  }
 });
 
 test("disabled and invalid configuration make zero calls; timeout defaults and boundaries", () => {
