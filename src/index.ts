@@ -22,7 +22,8 @@ import { Animator } from "./animator.ts";
 import { createWidgetFactory } from "./widget.ts";
 import { resolveRenderer } from "./terminal.ts";
 import { readYoloRest } from "./yolo.ts";
-import { ExternalDisplays } from "./external_display.ts";
+import { ExternalDisplay, ExternalDisplays, type SelectedImage } from "./external_display.ts";
+import { createD200Display, d200Url } from "./d200_display.ts";
 import { DisplayActivityTracker } from "./display_activity.ts";
 
 const WIDGET_KEY = "gentle-emote";
@@ -85,6 +86,8 @@ const EMOTE_DESCRIPTIONS: Record<string, string> = {
   internalOff: "hide the terminal avatar (external delivery stays active)",
   debugOn: "resume delivery to configured localhost simulators",
   debugOff: "pause localhost delivery without affecting the ESP32",
+  d200On: "mirror every frame to the Ulanzi D200 key on 127.0.0.1:8003",
+  d200Off: "stop mirroring to the Ulanzi D200 key",
 };
 
 /** Check if a set directory contains any image frames (PNG files in state subdirs). */
@@ -160,7 +163,11 @@ export default function (pi: ExtensionAPI) {
   if (!config.enabled) return;
 
   let externalDisplay: ExternalDisplays | null = null;
-  const displayActivity = new DisplayActivityTracker(activity => externalDisplay?.updateActivity(activity));
+  let d200Display: ExternalDisplay | null = null;
+  const displayActivity = new DisplayActivityTracker(activity => {
+    externalDisplay?.updateActivity(activity);
+    d200Display?.updateActivity(activity);
+  });
   let currentEmoteSet = "gentleman";
   let widgetActive = false;
   let internalVisible = true;
@@ -180,6 +187,45 @@ export default function (pi: ExtensionAPI) {
   let yoloVariant: EmoteState | null = null;
 
   const animator = new Animator(config, renderer);
+
+  /** Every enabled destination, including the runtime-only D200 key. */
+  function frameSink() {
+    const targets = [externalDisplay, d200Display].filter(
+      (display): display is ExternalDisplay => display?.enabled === true,
+    );
+    if (targets.length === 0) return null;
+    return (image: SelectedImage) => {
+      for (const display of targets) display.select(image);
+    };
+  }
+
+  /** Runtime-only mirror to the D200 key: no config, no persistence. */
+  function setD200Display(enabled: boolean, ctx: any): void {
+    if (enabled) {
+      if (d200Display?.enabled) {
+        ctx.ui?.notify?.(`[${EXTENSION_NAME}] D200 mirroring already on: ${d200Url()}`, "info");
+        return;
+      }
+      d200Display?.dispose();
+      d200Display = createD200Display({
+        fetcher: fetch,
+        report: (message) => ctx.ui?.notify?.(`[${EXTENSION_NAME}] ${message}`, "warning"),
+      });
+      d200Display.updateActivity(displayActivity.snapshot());
+      renderer.setFrameSink?.(frameSink());
+      refreshCurrentFrame();
+      ctx.ui?.notify?.(`[${EXTENSION_NAME}] D200 mirroring on: ${d200Url()}`, "info");
+      return;
+    }
+    if (!d200Display) {
+      ctx.ui?.notify?.(`[${EXTENSION_NAME}] D200 mirroring already off`, "info");
+      return;
+    }
+    d200Display.dispose();
+    d200Display = null;
+    renderer.setFrameSink?.(frameSink());
+    ctx.ui?.notify?.(`[${EXTENSION_NAME}] D200 mirroring off`, "info");
+  }
 
   function loadEmoteSet(setName: string) {
     currentEmoteSet = setName;
@@ -208,7 +254,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    renderer.setFrameSink?.(externalDisplay?.enabled ? (image) => externalDisplay?.select(image) : null);
+    renderer.setFrameSink?.(frameSink());
     const framesDir = !internalVisible && isAsciiOnly ? join(extDir, "emotes", "gentleman") : setDir;
     renderer.loadFrames(framesDir, extDir, createAccentTransform(accent));
     animator.setEmotesConfig(loadEmotesConfig(framesDir));
@@ -383,15 +429,19 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.registerCommand?.("emote", {
-    description: "Gentle-emote: /emote <state> | demo | internalOn | internalOff | debugOn | debugOff",
+    description: "Gentle-emote: /emote <state> | demo | internalOn | internalOff | debugOn | debugOff | d200On | d200Off",
     getArgumentCompletions: (prefix: string) =>
-      [...EMOTE_STATES, "demo", "internalOn", "internalOff", "debugOn", "debugOff"]
+      [...EMOTE_STATES, "demo", "internalOn", "internalOff", "debugOn", "debugOff", "d200On", "d200Off"]
         .filter((name) => name.startsWith(prefix.trim()))
         .map((name) => ({ value: name, label: name, description: EMOTE_DESCRIPTIONS[name] })),
     handler: async (args: string, ctx: any) => {
       const name = args.trim();
       if (!widgetActive) {
         ctx.ui?.notify?.(`[${EXTENSION_NAME}] avatar inactive (no UI or disabled)`, "warning");
+        return;
+      }
+      if (name === "d200On" || name === "d200Off") {
+        setD200Display(name === "d200On", ctx);
         return;
       }
       if (name === "debugOn" || name === "debugOff") {
@@ -416,7 +466,7 @@ export default function (pi: ExtensionAPI) {
         previewState(name as EmoteState);
         return;
       }
-      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo", "internalOn", "internalOff", "debugOn", "debugOff"].join(", ")}`, "info");
+      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo", "internalOn", "internalOff", "debugOn", "debugOff", "d200On", "d200Off"].join(", ")}`, "info");
     },
   });
 
@@ -481,6 +531,8 @@ export default function (pi: ExtensionAPI) {
     animator.disposeRenderer();
     externalDisplay?.dispose();
     externalDisplay = null;
+    d200Display?.dispose();
+    d200Display = null;
     unwatchBanner();
     stopTerminalInput?.();
     stopTerminalInput = null;

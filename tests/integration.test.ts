@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Container, visibleWidth } from "@earendil-works/pi-tui";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -232,5 +232,48 @@ test("the framed avatar sits beside the prompt, which grows to the frame height"
   } finally {
     await lab.shutdown();
     lab.restore();
+  }
+});
+
+test("/emote d200Off stops the D200 stream without touching config", async () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-d200-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({}));
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  globalThis.fetch = async (url, init) => { calls.push({ url: String(url), init: init! }); return new Response(); };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root);
+    const emote = lab.commands.get("emote");
+    assert.ok(emote, "/emote is registered");
+
+    const completions = await emote.getArgumentCompletions("d200");
+    assert.deepEqual(completions.map((item: any) => item.value), ["d200On", "d200Off"]);
+
+    await lab.emit("tool_execution_start", { toolName: "bash" });
+    await flush();
+    assert.equal(calls.length, 0, "nothing is delivered before d200On");
+
+    await emote.handler("d200On", lab.ctx);
+    await lab.emit("tool_execution_start", { toolName: "read" });
+    await flush();
+    assert.ok(calls.length > 0, "d200On mirrors frames");
+    assert.ok(calls.every((call) => call.url === "http://127.0.0.1:8003/emote"));
+    assert.equal(new Headers(calls.at(-1)!.init.headers).get("X-Emote-Version"), "1");
+
+    const delivered = calls.length;
+    await emote.handler("d200Off", lab.ctx);
+    await lab.emit("tool_execution_start", { toolName: "write" });
+    await flush();
+    assert.equal(calls.length, delivered, "d200Off stops delivery");
+
+    // The toggle is runtime-only: no config file was written and the state is not persisted.
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "config.json"), "utf8")), {});
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
   }
 });

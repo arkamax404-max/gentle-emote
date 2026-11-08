@@ -37,6 +37,11 @@ export class DisplayActivityTracker {
     this.set("idle", "idle");
   }
 
+  /** Current activity, so a destination enabled mid-session starts from the truth. */
+  snapshot(): DisplayActivity {
+    return { status: this.status, phase: this.phase, activeSubagents: this.subagents.size };
+  }
+
   private emit(): void {
     this.publish({ status: this.status, phase: this.phase, activeSubagents: this.subagents.size });
   }

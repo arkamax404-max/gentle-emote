@@ -82,6 +82,8 @@ Restart the session (or `/reload`) and the Gentleman says hi.
 | `/emote internalOn` | Shows the terminal avatar again without disabling external delivery |
 | `/emote debugOff` | Pauses POSTs to configured localhost simulators; ESP32 delivery continues |
 | `/emote debugOn` | Resumes localhost delivery immediately with the latest PNG and activity |
+| `/emote d200On` | Mirrors frames to a Ulanzi D200 key on `127.0.0.1:8003` (runtime only, independent of `config.json`) |
+| `/emote d200Off` | Stops the D200 mirror without touching configured destinations |
 
 Any new prompt cancels a preview, so the avatar always follows the real agent.
 
@@ -162,6 +164,19 @@ Run `/reload`, open the simulator in your browser, then `/emote demo`. Set `enab
 - **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. Both destinations still receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine.
 
 Optional `outline: "#ffffff"` adds a one-pixel external white silhouette to display PNGs only (not terminal art or text labels). It can be inherited from the parent or overridden per target. Transparent sprites use their alpha mask; fully opaque sprites such as the shipped set treat pure black as background. Only background connected to the outside is outlined, so enclosed holes stay untouched. Black artwork touching the external black matte cannot be distinguished from it. The outline may extend one pixel outside the sprite bounds; pixels at the top canvas edge are clipped. Omit the option to disable it.
+
+### Ulanzi D200 key
+
+`/emote d200On` adds a destination for the [Ulanzi D200 key client](../gentle-emote-d200) that lives next
+to the terminal: every selected frame, its labels and the outline are POSTed to
+`http://127.0.0.1:8003/emote`. `/emote d200Off` disposes it.
+
+- The toggle is **runtime only**: it never writes `config.json` and never changes configured
+  `externalDisplay` destinations, so it cannot be persisted by accident.
+- Port **8003** keeps the key clear of the browser simulator (`8000`) and of the ESP32 firmware
+  (`80`). `GENTLE_EMOTE_D200_PORT` overrides it for local experiments.
+- Enabling it mid-session starts with the current activity labels and re-sends the current frame.
+- The key press has no behaviour yet: the device only displays.
 
 ### Receiver protocol v1
 
