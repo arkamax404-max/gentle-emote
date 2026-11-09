@@ -31,7 +31,15 @@
     "verify": "loop",
     "judge": "loop",
     "review": "loop",
-    "jira": "loop"
+    "jira": "loop",
+    "authorizing": "loop",
+    "exploring": "loop",
+    "researching": "loop",
+    "deciding": "loop",
+    "planning": "loop",
+    "implementing": "loop",
+    "checking": "loop",
+    "closing": "loop"
   },
   "frameMs": {
     "hi": 280,
@@ -55,6 +63,14 @@
     "verify": 360,
     "judge": 450,
     "review": 1200,
-    "jira": 380
+    "jira": 380,
+    "authorizing": 650,
+    "exploring": 420,
+    "researching": 520,
+    "deciding": 620,
+    "planning": 480,
+    "implementing": 320,
+    "checking": 520,
+    "closing": 800
   }
 }

@@ -184,6 +184,23 @@ test("prompt display priority keeps underlying activity and nested prompts indep
 });
 
 
+test("without a published phase the generic scenes keep their own visuals (previous behavior)", () => {
+  mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  try {
+    const renderer = fakeRenderer({ think: ["a", "b"], read: ["a", "b"], write: ["a", "b"], tool: ["a", "b"] });
+    const animator = new Animator(config, renderer as any);
+    animator.transitionTo("think");
+    assert.ok(renderer.shown.at(-1)!.startsWith("think#"));
+    animator.transitionTo("read");
+    assert.ok(renderer.shown.at(-1)!.startsWith("read#"));
+    animator.transitionTo("write");
+    assert.ok(renderer.shown.at(-1)!.startsWith("write#"));
+    animator.transitionTo("tool");
+    assert.ok(renderer.shown.at(-1)!.startsWith("tool#"));
+    animator.clearAllTimers();
+  } finally { mock.timers.reset(); }
+});
+
 test("waking from the grandma waves without replaying the propeller arrival", () => {
   mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   try {

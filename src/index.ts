@@ -52,6 +52,7 @@ const PREVIEW_TALK_TEXT = "Here is the thing: this preview talks for a few secon
 const PREVIEW_LOOPING_STATES = new Set<EmoteState>([
   "think", "read", "write", "tool", "ask", "compact", "delegate", "jobs", "remember", "yolo", "super-yolo",
   "explore", "build", "verify", "judge", "review", "jira",
+  "authorizing", "exploring", "researching", "deciding", "planning", "implementing", "checking", "closing",
 ]);
 const DEMO_SEQUENCE: EmoteState[] = [
   "hi", "think", "talk", "read", "tool", "delegate", "explore", "build", "verify", "judge", "review", "jira",
@@ -82,6 +83,14 @@ const EMOTE_DESCRIPTIONS: Record<string, string> = {
   judge: "judge wig and gavel (judge / refuter subagents)",
   review: "red pen on a page, robot holds the review sign (review-* subagents)",
   jira: "launches a rocket into a cloud (jira subagents)",
+  authorizing: "reviews an approval card (host ODD phase)",
+  exploring: "sweeps a magnifying glass over footprints (host ODD phase)",
+  researching: "reads an open reference book (host ODD phase)",
+  deciding: "weighs two choice cards (host ODD phase)",
+  planning: "draws the approach on a blueprint (host ODD phase)",
+  implementing: "types on the keyboard, code flying (host ODD phase)",
+  checking: "fills a checklist with green checks (host ODD phase)",
+  closing: "presents the completed-work folder (host ODD phase)",
   demo: "plays every state in a row",
   internalOn: "show the terminal avatar (external delivery stays active)",
   internalOff: "hide the terminal avatar (external delivery stays active)",

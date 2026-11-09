@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Canvas, text, textWidth } from "./canvas.ts";
 import { C, KEY, W, drawArm, drawBust, drawPalm, drawRaisedArm, headband, newCanvas, setYoloLook, sunglasses } from "./gentleman.ts";
 import type { Look } from "./gentleman.ts";
+import { addWorkPhaseFrames } from "./work-phases.ts";
 
 const OUT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "emotes", "gentleman");
 /** Must match YOLO_SET_SUFFIX in src/emotes.ts: the runtime swaps to `<set>-yolo` while YOLO is on. */
@@ -921,6 +922,10 @@ for (const [name, step] of [["jira_1", 0], ["jira_2", 1], ["jira_3", 2]] as cons
   });
 }
 
+// --- Host ODD work phases: visual detail for the generic think/read/write/tool scenes ---
+
+addWorkPhaseFrames(add);
+
 // --- Output ---
 
 const emotesConfig = {
@@ -928,13 +933,17 @@ const emotesConfig = {
   talk: { weights: { "talk_close.png": 1, "talk_small.png": 3, "talk_mid.png": 3, "talk_wide.png": 1 } },
   cycle: {
     hi: "loop", think: "loop", tool: "loop", write: "loop", ask: "loop", success: "loop", failure: "loop", read: "pingpong", compact: "pingpong",
-    delegate: "loop", jobs: "loop", remember: "loop", yolo: "loop",
+    delegate: "loop", jobs: "loop", remember: "loop", yolo: "loop", "super-yolo": "loop",
     explore: "loop", build: "loop", verify: "loop", judge: "loop", review: "loop", jira: "loop",
+    authorizing: "loop", exploring: "loop", researching: "loop", deciding: "loop",
+    planning: "loop", implementing: "loop", checking: "loop", closing: "loop",
   },
   frameMs: {
     hi: 280, think: 420, tool: 260, write: 240, read: 450, ask: 800, success: 420, failure: 380, compact: 380, grandma: 520, bye: 650,
-    delegate: 320, jobs: 900, remember: 800, yolo: 1100,
+    delegate: 320, jobs: 900, remember: 800, yolo: 1100, "super-yolo": 1100,
     explore: 420, build: 280, verify: 360, judge: 450, review: 1200, jira: 380,
+    authorizing: 650, exploring: 420, researching: 520, deciding: 620,
+    planning: 480, implementing: 320, checking: 520, closing: 800,
   },
 };
 

@@ -1,10 +1,14 @@
 import type { TUI } from "@earendil-works/pi-tui";
 import type { EmoteState, Config, EmotesConfig } from "./types.ts";
 import type { Renderer, RenderedFrame } from "./renderer.ts";
+import type { WorkPhase } from "./work_phase.ts";
 import { log } from "./log.ts";
 
 /** How long the talk scene lingers once the reply has finished streaming. */
 const TALK_TAIL_MS = 500;
+
+/** Generic work states that may wear the detailed host phase as a visual. */
+const PHASE_VISUAL_STATES: ReadonlySet<EmoteState> = new Set(["think", "read", "write", "tool"]);
 
 // --- Helpers ---
 
@@ -41,6 +45,7 @@ export class Animator {
   private afterTalkState: EmoteState = "idle";
   private stopped = false;
   private idleVariant: EmoteState | null = null;
+  private workPhase: WorkPhase | null = null;
   private promptDepth = 0;
   private deferredFailure: { state: EmoteState; file: string } | null = null;
 
@@ -73,6 +78,19 @@ export class Animator {
 
   setHoldNextState(state: EmoteState) {
     this.holdNextState = state;
+  }
+
+  /**
+   * The host's detailed ODD phase: a display detail that re-skins the generic
+   * think/read/write/tool scenes when the set ships frames for it. Never a
+   * logical state: prompts, failures, compaction, talk, idle and delegation
+   * keep their own visuals, and missing frames fall back truthfully.
+   */
+  setWorkPhase(phase: WorkPhase | null) {
+    if (phase === this.workPhase) return;
+    this.workPhase = phase;
+    if (this.stopped) return;
+    if (PHASE_VISUAL_STATES.has(this.currentState)) this.transitionTo(this.currentState);
   }
 
   /** State to play once the current talk animation finishes (then back to idle). */
@@ -182,6 +200,14 @@ export class Animator {
       case "judge":
       case "review":
       case "jira": this.enterCycle(state); break;
+      case "authorizing":
+      case "exploring":
+      case "researching":
+      case "deciding":
+      case "planning":
+      case "implementing":
+      case "checking":
+      case "closing": this.enterCycle(state); break;
       case "grandma": this.enterSequence(state); break;
       case "bye": this.enterSequence(state); break;
     }
@@ -371,9 +397,12 @@ export class Animator {
     return this.emotesConfig.frameMs?.[state] ?? this.config.cycleMs;
   }
 
-  /** Super YOLO keeps the sun on screen while the model is thinking. */
+  /** Super YOLO keeps the sun on screen while the model is thinking; the host phase re-skins the rest. */
   private cycleVisual(state: EmoteState): EmoteState {
     if (state === "think" && this.idleVariant === "super-yolo") return "super-yolo";
+    if (this.workPhase && PHASE_VISUAL_STATES.has(state) && this.renderer.getFrameFiles(this.workPhase).length > 0) {
+      return this.workPhase;
+    }
     return state;
   }
 

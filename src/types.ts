@@ -3,6 +3,10 @@ export const EMOTE_STATES = [
   "success", "failure", "compact", "ask", "grandma", "bye",
   "delegate", "jobs", "remember", "yolo", "super-yolo",
   "explore", "build", "verify", "judge", "review", "jira",
+  // Host ODD work phases (src/work_phase.ts): visuals for the generic
+  // think/read/write/tool scenes, never separate logical states.
+  "authorizing", "exploring", "researching", "deciding",
+  "planning", "implementing", "checking", "closing",
 ] as const;
 
 export type EmoteState = (typeof EMOTE_STATES)[number];
