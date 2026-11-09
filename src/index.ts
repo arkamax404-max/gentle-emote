@@ -165,6 +165,8 @@ export default function (pi: ExtensionAPI) {
 
   if (!config.enabled) return;
 
+  // A terminal UI does not establish ownership of shared displays in delegated sessions.
+  const ownsSharedDisplays = process.env.GENTLE_PI_AGENTS_CHILD !== "1";
   let externalDisplay: ExternalDisplays | null = null;
   let d200Display: ExternalDisplay | null = null;
   const displayActivity = new DisplayActivityTracker(activity => {
@@ -205,6 +207,7 @@ export default function (pi: ExtensionAPI) {
 
   /** Dedicated D200 mirror, independent of configured external destinations. */
   function setD200Display(enabled: boolean, ctx: any): void {
+    if (!ownsSharedDisplays) return;
     if (enabled) {
       if (d200Display?.enabled) {
         ctx.ui?.notify?.(`[${EXTENSION_NAME}] D200 mirroring already on: ${d200Url()}`, "info");
@@ -506,11 +509,13 @@ export default function (pi: ExtensionAPI) {
     const states = outputState.load(report);
     internalVisible = states.internal;
     externalDisplay?.dispose();
-    externalDisplay = new ExternalDisplays(config.externalDisplay, fetch, report);
-    externalDisplay.setDebugEnabled(states.debug);
-    externalDisplay.setDisplayEnabled(states.display);
+    // Never create shared-display senders in a child, even with saved On states.
+    // Animation and output commands cannot bypass this ownership restriction.
+    externalDisplay = ownsSharedDisplays ? new ExternalDisplays(config.externalDisplay, fetch, report) : null;
+    externalDisplay?.setDebugEnabled(states.debug);
+    externalDisplay?.setDisplayEnabled(states.display);
     d200Display?.dispose();
-    d200Display = states.d200 ? createD200Display({ fetcher: fetch, report }) : null;
+    d200Display = ownsSharedDisplays && states.d200 ? createD200Display({ fetcher: fetch, report }) : null;
     displayActivity.reset();
     lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
     renderer.dispose();

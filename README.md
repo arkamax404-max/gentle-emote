@@ -143,6 +143,8 @@ Output commands do not write `config.json`, invent destinations or enable entrie
 
 ## Mirror to an external 64×64 display
 
+Only the main session sends images to external displays. Gentle Shell subagent sessions (`GENTLE_PI_AGENTS_CHILD=1`) never create an external sender, even when global or project configuration enables delivery; `/emote debugOn` cannot override this restriction. Their local terminal avatar is unaffected. The main session can still show delegation scenes and its active-subagent count, but child sessions do not compete for the same display.
+
 With the sibling `emote-display-simulator` receiver running locally, add this to `.pi/extensions/gentle-emote/config.json` (or your global config):
 
 ```json

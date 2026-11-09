@@ -4,6 +4,7 @@ import { Container, visibleWidth } from "@earendil-works/pi-tui";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OutputStateStore, OUTPUTS } from "../src/output_state.ts";
 
 const PLACEHOLDER = "\u{10EEEE}";
 
@@ -71,6 +72,54 @@ async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn
 }
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/g, "");
+
+test("Gentle Shell child sessions never POST even with saved On states or output commands", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const root = mkdtempSync(join(tmpdir(), "emote-child-session-"));
+  const profile = join(root, "profile");
+  const saved = new OutputStateStore(profile);
+  for (const output of OUTPUTS) saved.save(output, true);
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({
+    externalDisplay: { enabled: true, targets: [
+      { enabled: true, url: "http://localhost:8000/emote" },
+      { enabled: true, url: "http://matrix/emote" },
+    ] },
+  }));
+  const previousChild = process.env.GENTLE_PI_AGENTS_CHILD;
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return new Response(); };
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    process.env.GENTLE_PI_AGENTS_CHILD = "1";
+    lab = await boot(root, [], profile);
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "child-read" });
+    t.mock.timers.tick(450);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(calls, 0, "a child must not compete with the parent for either display");
+    for (const output of ["debugOn", "displayOn", "d200On"]) {
+      await lab.commands.get("emote").handler(output, lab.ctx);
+    }
+    await lab.emit("ui_prompt_start");
+    t.mock.timers.tick(450);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(calls, 0, "output commands and animation cannot bypass the child-session restriction");
+    assert.deepEqual(saved.load(message => assert.fail(message)), {
+      internal: true, debug: true, d200: true, display: true,
+    }, "the child guard does not discard global output preferences");
+    lab.widgets.render(100);
+    assert.ok(lab.writes.length > 0, "the child restriction does not disable its local terminal avatar");
+    await lab.shutdown();
+    assert.equal(calls, 0, "shutdown must not send an external farewell");
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    if (previousChild === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD;
+    else process.env.GENTLE_PI_AGENTS_CHILD = previousChild;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("session wiring mirrors image selections and prompt overlays, shutdown stops delivery", async () => {
   const root = mkdtempSync(join(tmpdir(), "emote-session-"));
