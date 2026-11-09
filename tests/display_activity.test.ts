@@ -21,6 +21,28 @@ test("tracks concurrent subagent calls by ID, ignores other tools and resets", (
   assert.deepEqual(snapshots.at(-1), { status: "idle", phase: "idle", activeSubagents: 0 });
 });
 
+test("an explicit native subagent count overrides the call counter and survives resets", () => {
+  const snapshots: DisplayActivity[] = [];
+  const tracker = new DisplayActivityTracker(activity => snapshots.push(activity));
+  tracker.toolStart("subagent_run", "a");
+  assert.equal(tracker.snapshot().activeSubagents, 1);
+  tracker.setNativeSubagents(3);
+  assert.equal(tracker.snapshot().activeSubagents, 3, "native is authoritative while set");
+  tracker.reset();
+  assert.deepEqual(snapshots.at(-1), { status: "idle", phase: "idle", activeSubagents: 3 }, "only a session change clears the native count");
+  tracker.toolEnd("a", false);
+  assert.equal(tracker.snapshot().activeSubagents, 3, "call bookkeeping keeps running underneath");
+  tracker.setNativeSubagents(0);
+  assert.equal(tracker.snapshot().activeSubagents, 0);
+  tracker.toolStart("subagent_run", "s");
+  assert.equal(tracker.snapshot().activeSubagents, 0, "native zero still wins over the open call");
+  tracker.setNativeSubagents(null);
+  assert.equal(tracker.snapshot().activeSubagents, 1, "the observed call is still tracked and takes over again");
+  tracker.setNativeSubagents(1.5);
+  tracker.setNativeSubagents(-2);
+  assert.equal(tracker.snapshot().activeSubagents, 1, "invalid counts are ignored");
+});
+
 test("the optional work phase rides along, is omitted when absent and rejects invalid detail", () => {
   const snapshots: DisplayActivity[] = [];
   const tracker = new DisplayActivityTracker(activity => snapshots.push(activity));
