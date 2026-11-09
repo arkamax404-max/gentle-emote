@@ -266,6 +266,53 @@ test("activity-only updates resend unchanged sprites and snapshot the latest pen
   } finally { sender.dispose(); }
 });
 
+test("the detailed work phase header is additive, validated and deduplicated, and the PNG cache is keyed by it", async () => {
+  const calls: RequestInit[] = [];
+  const sender = new ExternalDisplay(options, async (_url, init) => { calls.push(init!); return new Response(); });
+  try {
+    sender.select(frame());
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "implementing" });
+    await tick();
+    let headers = new Headers(calls.at(-1)!.headers);
+    assert.equal(headers.get("X-Emote-Phase"), "executing", "the coarse header is preserved exactly");
+    assert.equal(headers.get("X-Emote-Work-Phase"), "implementing");
+    assert.ok(!JSON.stringify(calls.at(-1)!.headers).includes("undefined"));
+
+    sender.updateActivity({ status: "busy", phase: "thinking", activeSubagents: 0 });
+    await tick();
+    headers = new Headers(calls.at(-1)!.headers);
+    assert.equal(headers.get("X-Emote-Work-Phase"), null, "no header without a detail");
+
+    // The detail is part of the dedup identity. select() delivered once, then each
+    // distinct activity (executing+detail, thinking plain, thinking+detail) resends.
+    sender.updateActivity({ status: "busy", phase: "thinking", activeSubagents: 0, workPhase: "planning" });
+    await tick();
+    assert.equal(calls.length, 4);
+    sender.updateActivity({ status: "busy", phase: "thinking", activeSubagents: 0, workPhase: "planning" });
+    await tick();
+    assert.equal(calls.length, 4, "an identical work phase is deduplicated");
+
+    // An invalid work phase never mutates the stored activity.
+    const before = calls.length;
+    sender.updateActivity({ status: "busy", phase: "thinking", activeSubagents: 0, workPhase: "scheming" } as any);
+    await tick();
+    assert.equal(calls.length, before);
+    sender.select(frame("detail.png")); await tick();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "planning");
+
+    // The prepared PNG cache is keyed by the work phase detail.
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "implementing" });
+    await tick();
+    assert.notDeepEqual(calls.at(-2)!.body, calls.at(-1)!.body, "a different detail renders a different PNG");
+    const withImplementing = calls.at(-1)!.body;
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "planning" });
+    await tick();
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "implementing" });
+    await tick();
+    assert.deepEqual(calls.at(-1)!.body, withImplementing, "the cache hits for a previously rendered detail");
+  } finally { sender.dispose(); }
+});
+
 test("dedup identity includes post-accent image and set, streams are per sender", async () => {
   const calls: RequestInit[] = [];
   const fetcher: typeof fetch = async (_url, init) => { calls.push(init!); return new Response(); };
@@ -325,4 +372,37 @@ test("failures never escape; timeout aborts; disposal aborts and drops pending",
     const failing = new ExternalDisplay(options, fetcher);
     assert.doesNotThrow(() => failing.select(frame())); await tick(); failing.dispose();
   }
+});
+
+test("the selected state recomposes the PNG label and the cache keys it without changing headers", async () => {
+  const calls: RequestInit[] = [];
+  const sender = new ExternalDisplay(options, async (_url, init) => { calls.push(init!); return new Response(); });
+  try {
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0 });
+    sender.select({ base64, state: "explore", frame: "explore.png", set: "gentleman" });
+    await tick();
+    const generic = calls.at(-1)!.body;
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "explore");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Phase"), "executing");
+
+    // The same base64 with a selected exploring state renders exploring in the PNG bytes.
+    sender.select({ base64, state: "exploring", frame: "explore.png", set: "gentleman" });
+    await tick();
+    assert.equal(calls.length, 2);
+    const detailed = calls.at(-1)!.body;
+    assert.notDeepEqual(generic, detailed, "the selected state changes the rendered label bytes");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "exploring");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Phase"), "executing", "the coarse header stays");
+
+    // The prepared-PNG cache is keyed by the selected state: returning to the
+    // generic state recomposes the generic label, not the cached detail.
+    sender.select({ base64, state: "explore", frame: "explore.png", set: "gentleman" });
+    await tick();
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls.at(-1)!.body, generic, "the generic state label recomposes identically");
+    sender.select({ base64, state: "exploring", frame: "explore.png", set: "gentleman" });
+    await tick();
+    assert.equal(calls.length, 4);
+    assert.deepEqual(calls.at(-1)!.body, detailed, "the cached detailed label recomposes identically");
+  } finally { sender.dispose(); }
 });

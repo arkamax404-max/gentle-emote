@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ExternalDisplayConfig } from "./types.ts";
 import { prepareDisplayImage } from "./display_image.ts";
+import { isWorkPhase } from "./work_phase.ts";
 import { log } from "./log.ts";
 
 export interface SelectedImage { base64: string; state: string; frame: string; set: string }
@@ -9,6 +10,8 @@ export interface DisplayActivity {
   status: "idle" | "busy" | "error";
   phase: "idle" | "thinking" | "responding" | "executing" | "waiting" | "compacting";
   activeSubagents: number;
+  /** The host's detailed ODD work phase, when Gentle Shell published one. Optional: omitted when absent. */
+  workPhase?: "authorizing" | "exploring" | "researching" | "deciding" | "planning" | "implementing" | "checking" | "closing";
 }
 type Selection = SelectedImage & { activity: DisplayActivity };
 const IDENTIFIER = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
@@ -140,7 +143,11 @@ export class ExternalDisplay {
 
   updateActivity(activity: DisplayActivity): void {
     if (!Number.isSafeInteger(activity.activeSubagents) || activity.activeSubagents < 0) return;
-    this.activity = { ...activity };
+    // A present but invalid detail rejects the whole update; a valid or absent one is stored.
+    if (activity.workPhase !== undefined && !isWorkPhase(activity.workPhase)) return;
+    const { workPhase, ...rest } = activity;
+    this.activity = rest as DisplayActivity;
+    if (isWorkPhase(workPhase)) this.activity.workPhase = workPhase;
     if (this.selected) this.select(this.selected);
   }
 
@@ -168,10 +175,12 @@ export class ExternalDisplay {
     this.active = controller;
     this.timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
-      const cacheKey = JSON.stringify([image.base64, image.activity.status, image.activity.phase, image.activity.activeSubagents]);
+      // The selected state is part of the prepared label, so the cache must key it:
+      // the same base64 across different states renders different phase labels.
+      const cacheKey = JSON.stringify([image.base64, image.state, image.activity.status, image.activity.phase, image.activity.activeSubagents, image.activity.workPhase]);
       let body = this.cache.get(cacheKey);
       if (!body) {
-        body = prepareDisplayImage(image.base64, image.activity, this.options.background, this.options.backgroundCoverage, this.options.outline);
+        body = prepareDisplayImage(image.base64, { ...image.activity, state: image.state }, this.options.background, this.options.backgroundCoverage, this.options.outline);
         if (this.cache.size >= 32) this.cache.delete(this.cache.keys().next().value!);
         this.cache.set(cacheKey, body);
       }
@@ -182,6 +191,7 @@ export class ExternalDisplay {
           "Content-Type": "image/png", "X-Emote-Version": "1",
           "X-Emote-State": image.state, "X-Emote-Frame": image.frame, "X-Emote-Set": image.set,
           "X-Emote-Status": image.activity.status, "X-Emote-Phase": image.activity.phase,
+          ...(image.activity.workPhase === undefined ? {} : { "X-Emote-Work-Phase": image.activity.workPhase }),
           "X-Emote-Active-Subagents": String(image.activity.activeSubagents),
           "X-Emote-Stream-Id": this.streamId, "X-Emote-Sequence": String(++this.sequence),
         },

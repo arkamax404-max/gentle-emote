@@ -1,10 +1,11 @@
 import { decodePng, encodePng } from "./png.ts";
 import { drawDisplayOutline } from "./display_outline.ts";
 import { drawDisplayText } from "./display_text.ts";
+import { isWorkPhase } from "./work_phase.ts";
 import type { DisplayActivity } from "./external_display.ts";
 
 /** Raw post-accent sprite, not the terminal border; composite onto an opaque LED canvas. */
-export function prepareDisplayImage(base64: string, activity?: Pick<DisplayActivity, "status" | "phase"> & Partial<Pick<DisplayActivity, "activeSubagents">>, background = "#000000", backgroundCoverage = 1, outline?: string): Buffer {
+export function prepareDisplayImage(base64: string, activity?: Pick<DisplayActivity, "status" | "phase"> & Partial<Pick<DisplayActivity, "activeSubagents" | "workPhase"> & { state?: string }>, background = "#000000", backgroundCoverage = 1, outline?: string): Buffer {
   if (outline !== undefined && !/^#[0-9a-f]{6}$/i.test(outline)) throw new Error("invalid display outline");
   if (!Number.isFinite(backgroundCoverage) || backgroundCoverage < 0 || backgroundCoverage > 1) throw new Error("invalid background coverage");
   if (!/^#[0-9a-f]{6}$/i.test(background)) throw new Error("invalid display background");
@@ -37,9 +38,25 @@ export function prepareDisplayImage(base64: string, activity?: Pick<DisplayActiv
   if (activity) {
     const color = activity.status === "error" ? [255, 96, 96] : activity.status === "busy" ? [255, 208, 96] : [128, 224, 160];
     const count = activity.activeSubagents ?? 0;
-    const label = `${activity.status} (${count > 999 ? "999+" : count})`;
-    drawDisplayText(data, label, 44, index => index > activity.status.length ? [255, 255, 0] : color);
-    drawDisplayText(data, activity.phase, 54, [224, 224, 224]);
+    // Both coarse labels idle while subagents run: display only. The requested
+    // SUBAGETNS spelling is intentional, not a typo to correct.
+    const running = activity.status === "idle" && activity.phase === "idle" && count > 0;
+    const statusLabel = running ? "SUBAGETNS" : activity.status;
+    const label = `${statusLabel} (${count > 999 ? "999+" : count})`;
+    drawDisplayText(data, label, 44, index => index > statusLabel.length ? [255, 255, 0] : color);
+    // The host's detailed phase is display detail only: it replaces just the eligible
+    // coarse thinking/executing labels, never the truthful waiting/compacting/idle/
+    // responding ones, and the coarse label remains without either source. The selected
+    // PNG state is the most truthful of all: it is the exact frame being shown, so it
+    // names the phase row under any coarse phase, host phase or none. Ordinary emote
+    // states are not host phases and keep the existing behavior.
+    const coarse = activity.phase;
+    const detailed = isWorkPhase(activity.state)
+      ? activity.state
+      : isWorkPhase(activity.workPhase) && (coarse === "thinking" || coarse === "executing")
+        ? activity.workPhase
+        : coarse;
+    drawDisplayText(data, running ? "RUNNING" : detailed, 54, [224, 224, 224]);
   }
   return encodePng({ width: 64, height: 64, data });
 }

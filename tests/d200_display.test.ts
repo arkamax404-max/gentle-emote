@@ -84,6 +84,23 @@ test("activity changes resend the same frame with new labels", async () => {
   }
 });
 
+test("the D200 mirror carries the detailed work phase header", async () => {
+  const { calls, fetcher } = recorder();
+  const display = createD200Display({ fetcher });
+  try {
+    display.select(image);
+    await flush();
+    display.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "checking" });
+    await flush();
+    assert.equal(calls.length, 2);
+    const headers = calls[1]!.init.headers as Record<string, string>;
+    assert.equal(headers["X-Emote-Phase"], "executing");
+    assert.equal(headers["X-Emote-Work-Phase"], "checking");
+  } finally {
+    display.dispose();
+  }
+});
+
 test("disposing the D200 display stops delivery", async () => {
   const { calls, fetcher } = recorder();
   const display = createD200Display({ fetcher });
