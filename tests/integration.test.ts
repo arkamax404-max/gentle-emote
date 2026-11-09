@@ -4,6 +4,7 @@ import { Container, visibleWidth } from "@earendil-works/pi-tui";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { OutputStateStore, OUTPUTS } from "../src/output_state.ts";
 
 const PLACEHOLDER = "\u{10EEEE}";
 const SESSION_ID = "integration-session";
@@ -11,10 +12,11 @@ const SESSION_ID = "integration-session";
 const SUBAGENT_CHANNEL = "gentle-pi:notification:source";
 
 /** Loads the extension against a fake Pi and a real pi-tui component tree (Ghostty, no multiplexer). */
-export async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn"], profile?: string) {
+export async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn"], profile?: string, childSession = false) {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   const agentRoot = profile ?? mkdtempSync(join(tmpdir(), "emote-profile-"));
   for (const key of ["TMUX", "ZELLIJ", "ZELLIJ_SESSION_NAME", "KITTY_WINDOW_ID", "TERM_PROGRAM", "GENTLE_PI_AGENTS_CHILD"]) delete process.env[key];
+  if (childSession) process.env.GENTLE_PI_AGENTS_CHILD = "1";
   process.env.GHOSTTY_RESOURCES_DIR = "/usr/share/ghostty";
   process.env.PI_CODING_AGENT_DIR = agentRoot;
 
@@ -92,6 +94,53 @@ export async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "di
 }
 
 const plain = (line: string) => line.replace(/\x1b\[[0-9;]*m/g, "");
+
+test("Gentle Shell child sessions never POST or register output commands even with saved On states", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const root = mkdtempSync(join(tmpdir(), "emote-child-session-"));
+  const profile = join(root, "profile");
+  const saved = new OutputStateStore(profile);
+  for (const output of OUTPUTS) saved.save(output, true);
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({
+    externalDisplay: { enabled: true, targets: [
+      { enabled: true, url: "http://localhost:8000/emote" },
+      { enabled: true, url: "http://matrix/emote" },
+    ] },
+  }));
+  const previousChild = process.env.GENTLE_PI_AGENTS_CHILD;
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return new Response(); };
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    process.env.GENTLE_PI_AGENTS_CHILD = "1";
+    lab = await boot(root, [], profile, true);
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "child-read" });
+    t.mock.timers.tick(450);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(calls, 0, "a child must not compete with the parent for either display");
+    assert.equal(lab.commands.size, 0, "child sessions cannot register output commands");
+    await lab.emit("ui_prompt_start");
+    t.mock.timers.tick(450);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(calls, 0, "animation cannot bypass the child-session restriction");
+    assert.deepEqual(saved.load(message => assert.fail(message)), {
+      internal: true, debug: true, d200: true, display: true,
+    }, "the child guard does not discard global output preferences");
+    lab.widgets.render(100);
+    assert.equal(lab.writes.length, 0, "child sessions do not render a local terminal avatar");
+    assert.equal(lab.widgets.children.length, 0, "child sessions do not install a widget");
+    await lab.shutdown();
+    assert.equal(calls, 0, "shutdown must not send an external farewell");
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    if (previousChild === undefined) delete process.env.GENTLE_PI_AGENTS_CHILD;
+    else process.env.GENTLE_PI_AGENTS_CHILD = previousChild;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("session wiring mirrors image selections and prompt overlays, shutdown stops delivery", async () => {
   const root = mkdtempSync(join(tmpdir(), "emote-session-"));
