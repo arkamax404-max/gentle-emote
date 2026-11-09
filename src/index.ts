@@ -22,7 +22,7 @@ import { Animator } from "./animator.ts";
 import { createWidgetFactory } from "./widget.ts";
 import { resolveRenderer } from "./terminal.ts";
 import { readYoloRest } from "./yolo.ts";
-import { ExternalDisplay, ExternalDisplays, type SelectedImage } from "./external_display.ts";
+import { ExternalDisplay, ExternalDisplays, type SelectedImage, type FrameSink } from "./external_display.ts";
 import { createD200Display, d200Url } from "./d200_display.ts";
 import { DisplayActivityTracker } from "./display_activity.ts";
 import { SubagentTaskTracker } from "./subagent_activity.ts";
@@ -99,6 +99,7 @@ const EMOTE_DESCRIPTIONS: Record<string, string> = {
   demo: "plays every state in a row",
   internalOn: "show the terminal avatar (external delivery stays active)",
   internalOff: "hide the terminal avatar (external delivery stays active)",
+  status: "show the last selected PNG, work phase source and activity snapshot (read-only diagnostic)",
   debugOn: "resume delivery to configured localhost simulators",
   debugOff: "pause localhost delivery without affecting the ESP32",
   d200On: "mirror every frame to the Ulanzi D200 key on 127.0.0.1:8003",
@@ -224,16 +225,26 @@ export default function (pi: ExtensionAPI) {
   let watchedBannerFiles: string[] = [];
   let yoloOn = false;
   let yoloVariant: EmoteState | null = null;
+  /** Last PNG the renderer actually selected, safe fields only; diagnostics for /emote status. */
+  let lastSelected: { state: string; frame: string; set: string } | null = null;
 
   const animator = new Animator(config, renderer);
 
-  /** Every configured destination; paused targets retain the latest frame. */
-  function frameSink() {
+  /**
+   * Every configured destination; paused targets retain the latest frame.
+   * The sink also captures the last selected PNG for /emote status, so the
+   * diagnostic works with every output off (no delivery, no network). The
+   * mirrored ASCII renderer only activates its PNG companion for real
+   * delivery — a capture-only sink would change what it renders — so it
+   * keeps receiving null when no destination is enabled.
+   */
+  function frameSink(): FrameSink | null {
     const targets = [externalDisplay, d200Display].filter(
       (display): display is ExternalDisplay => display?.enabled === true,
     );
-    if (targets.length === 0) return null;
+    if (targets.length === 0 && renderer instanceof MirroredAsciiRenderer) return null;
     return (image: SelectedImage) => {
+      lastSelected = { state: image.state, frame: image.frame, set: image.set };
       for (const display of targets) display.select(image);
     };
   }
@@ -505,10 +516,26 @@ export default function (pi: ExtensionAPI) {
     }, DEMO_STEP_MS);
   }
 
+  /** Read-only /emote status diagnostic: never mutates animator, phases or outputs. */
+  function showEmoteStatus(ctx: any): void {
+    const png = lastSelected;
+    const activity = displayActivity.snapshot();
+    const native = workPhase.current();
+    const phase = native ?? directWorkPhase;
+    const source = native ? "native" : directWorkPhase ? "direct" : "none";
+    const pngPart = png
+      ? `state=${png.state} frame=${png.frame} set=${png.set}`
+      : "none selected yet";
+    ctx.ui?.notify?.(
+      `[${EXTENSION_NAME}] status: PNG ${pngPart}; phase ${phase ?? "none"} (source: ${source}); activity status=${activity.status} phase=${activity.phase} activeSubagents=${activity.activeSubagents}`,
+      "info",
+    );
+  }
+
   pi.registerCommand?.("emote", {
-    description: "Gentle-emote: /emote <state> | demo | internalOn | internalOff | debugOn | debugOff | d200On | d200Off | displayOn | displayOff (global, persistent)",
+    description: "Gentle-emote: /emote <state> | demo | status | internalOn | internalOff | debugOn | debugOff | d200On | d200Off | displayOn | displayOff (global, persistent)",
     getArgumentCompletions: (prefix: string) =>
-      [...EMOTE_STATES, "demo", ...OUTPUTS.flatMap(output => [`${output}On`, `${output}Off`])]
+      [...EMOTE_STATES, "demo", "status", ...OUTPUTS.flatMap(output => [`${output}On`, `${output}Off`])]
         .filter((name) => name.startsWith(prefix.trim()))
         .map((name) => ({ value: name, label: name, description: EMOTE_DESCRIPTIONS[name] })),
     handler: async (args: string, ctx: any) => {
@@ -548,6 +575,10 @@ export default function (pi: ExtensionAPI) {
         refreshCurrentFrame();
         return;
       }
+      if (name === "status") {
+        showEmoteStatus(ctx);
+        return;
+      }
       if (name === "demo") {
         playDemo();
         return;
@@ -556,7 +587,7 @@ export default function (pi: ExtensionAPI) {
         previewState(name as EmoteState);
         return;
       }
-      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo", ...OUTPUTS.flatMap(output => [`${output}On`, `${output}Off`])].join(", ")}`, "info");
+      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo", "status", ...OUTPUTS.flatMap(output => [`${output}On`, `${output}Off`])].join(", ")}`, "info");
     },
   });
 
