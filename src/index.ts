@@ -25,6 +25,8 @@ import { readYoloRest } from "./yolo.ts";
 import { ExternalDisplay, ExternalDisplays, type SelectedImage } from "./external_display.ts";
 import { createD200Display, d200Url } from "./d200_display.ts";
 import { DisplayActivityTracker } from "./display_activity.ts";
+import { ODD_PHASE_CHANGE_EVENT, ODD_PHASE_CURRENT_EVENT, WorkPhaseTracker, isWorkPhase } from "./work_phase.ts";
+import type { WorkPhase } from "./work_phase.ts";
 import { OutputStateStore, OUTPUTS } from "./output_state.ts";
 
 const WIDGET_KEY = "gentle-emote";
@@ -44,6 +46,8 @@ const HERDR_BLOCKED = "herdr:blocked";
 const YOLO_DISCOVERY_MS = 300;
 /** Quick tools whose scene would otherwise flash by: keep it until the next event. */
 const STICKY_TOOL_STATES = new Set<EmoteState>(["jobs", "remember"]);
+/** The explicit ODD phase tool: a successful call names the phase, "clear" drops the direct fallback. */
+const PHASE_TOOL = "gentle_odd_phase";
 
 const PREVIEW_MS = 6000;
 const DEMO_STEP_MS = 3500;
@@ -183,6 +187,20 @@ export default function (pi: ExtensionAPI) {
     externalDisplay?.updateActivity(activity);
     d200Display?.updateActivity(activity);
   });
+  /** Detailed host phase (Gentle Shell only); display detail alongside the coarse activity. */
+  const workPhase = new WorkPhaseTracker(() => applyWorkPhase());
+  /**
+   * Direct fallback: the phase a successful explicit gentle_odd_phase call named
+   * this turn. The native bus always wins; a host clear only reveals this fallback.
+   */
+  let directWorkPhase: WorkPhase | null = null;
+
+  /** Effective detail phase: the native bus phase, or the direct tool fallback filling the gap. */
+  function applyWorkPhase(): void {
+    const phase = workPhase.current() ?? directWorkPhase;
+    displayActivity.setWorkPhase(phase);
+    animator.setWorkPhase(phase);
+  }
   let currentEmoteSet = "gentleman";
   let widgetActive = false;
   const outputState = new OutputStateStore();
@@ -392,10 +410,43 @@ export default function (pi: ExtensionAPI) {
     animator.setIdleVariant(null);
   }
 
+  /** This session's id, when the host exposes it; the bus contract is session-scoped. */
+  function sessionId(): string | null {
+    try {
+      const id = (ctxRef as { sessionManager?: { getSessionId?: () => unknown } } | null | undefined)?.sessionManager?.getSessionId?.();
+      return typeof id === "string" && id !== "" ? id : null;
+    } catch { return null; }
+  }
+
+  let ctxRef: unknown = null;
+
+  /** Subscribe to the host's ODD phase bus and recover its current state; missing bus tolerated. */
+  function attachWorkPhase(): void {
+    workPhase.attach((pi as { events?: unknown }).events, sessionId());
+  }
+
   /** Activity transitions are suppressed while the goodbye animation owns the avatar. */
   function show(state: EmoteState) {
     if (!widgetActive || farewell) return;
     if (animator.currentState !== state) animator.transitionTo(state);
+  }
+
+  /**
+   * Adopt the phase named by a successful gentle_odd_phase call. Anything but a
+   * valid phase or "clear" is a no-op; failures and start events never adopt.
+   */
+  function adoptDirectPhase(args: unknown, isError: boolean | undefined): void {
+    if (isError) return;
+    const phase = (args as { phase?: unknown } | null | undefined)?.phase;
+    if (phase === "clear") {
+      if (directWorkPhase === null) return;
+      directWorkPhase = null;
+      applyWorkPhase();
+      return;
+    }
+    if (!isWorkPhase(phase) || directWorkPhase === phase) return;
+    directWorkPhase = phase;
+    applyWorkPhase();
   }
 
   function installWidget(ctx: any) {
@@ -523,7 +574,10 @@ export default function (pi: ExtensionAPI) {
     externalDisplay.setDisplayEnabled(states.display);
     d200Display?.dispose();
     d200Display = states.d200 ? createD200Display({ fetcher: fetch, report }) : null;
+    ctxRef = ctx;
     displayActivity.reset();
+    directWorkPhase = null;
+    attachWorkPhase();
     lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
     renderer.dispose();
     renderer = internalVisible ? createRendererFromResolved(lastResolved, config) : new PngSelectionRenderer();
@@ -580,6 +634,8 @@ export default function (pi: ExtensionAPI) {
       widgetActive = false;
     }
     animator.setTui(null);
+    workPhase.dispose();
+    directWorkPhase = null;
   });
 
   pi.on("model_select", async (event) => {
@@ -604,7 +660,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async () => {
+    // The tracker reset drops any stale detail from the previous turn; the
+    // handshake recovers the host's current phase (order-safe: a host event
+    // that arrives first is re-requested, and a host clear before this reset
+    // leaves the same cleared state).
+    directWorkPhase = null;
     displayActivity.reset();
+    animator.setWorkPhase(null);
+    attachWorkPhase();
     displayActivity.set("busy", "thinking");
     clearPreview();
     runHadError = false;
@@ -649,6 +712,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_execution_end", async (event) => {
     if (!widgetActive) return;
+    // A successful explicit phase call is adopted before the post-tool scene so
+    // the outgoing frame and headers already wear the named phase.
+    if (event.toolName === PHASE_TOOL) adoptDirectPhase(event.args, event.isError);
     displayActivity.toolEnd(event.toolCallId, event.isError);
     if (farewell) return;
     if (event.isError) {
@@ -683,6 +749,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("agent_end", async () => {
     if (!widgetActive) return;
+    directWorkPhase = null;
     displayActivity.reset();
     if (runHadError) displayActivity.set("error", "idle");
     if (farewell) {

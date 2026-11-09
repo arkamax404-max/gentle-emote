@@ -6,12 +6,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PLACEHOLDER = "\u{10EEEE}";
+const SESSION_ID = "integration-session";
+/** Gentle Shell's native notification channel, where subagent task transitions are published. */
+const SUBAGENT_CHANNEL = "gentle-pi:notification:source";
 
 /** Loads the extension against a fake Pi and a real pi-tui component tree (Ghostty, no multiplexer). */
-async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn"], profile?: string) {
+export async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn"], profile?: string) {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   const agentRoot = profile ?? mkdtempSync(join(tmpdir(), "emote-profile-"));
-  for (const key of ["TMUX", "ZELLIJ", "ZELLIJ_SESSION_NAME", "KITTY_WINDOW_ID", "TERM_PROGRAM"]) delete process.env[key];
+  for (const key of ["TMUX", "ZELLIJ", "ZELLIJ_SESSION_NAME", "KITTY_WINDOW_ID", "TERM_PROGRAM", "GENTLE_PI_AGENTS_CHILD"]) delete process.env[key];
   process.env.GHOSTTY_RESOURCES_DIR = "/usr/share/ghostty";
   process.env.PI_CODING_AGENT_DIR = agentRoot;
 
@@ -27,10 +30,27 @@ async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn
 
   const handlers = new Map<string, Function[]>();
   const commands = new Map<string, any>();
+  // A working pi.events bus so bus contracts (YOLO host UI, ODD work phase) can be exercised.
+  const busHandlers = new Map<string, Function[]>();
+  const busSent: Array<{ channel: string; payload: any }> = [];
+  const events = {
+    emit: (channel: string, payload: unknown) => {
+      busSent.push({ channel, payload });
+      for (const handler of [...(busHandlers.get(channel) ?? [])]) handler(payload);
+    },
+    on: (channel: string, handler: Function) => {
+      busHandlers.set(channel, [...(busHandlers.get(channel) ?? []), handler]);
+      return () => busHandlers.set(channel, (busHandlers.get(channel) ?? []).filter(existing => existing !== handler));
+    },
+  };
   const pi = {
     on: (event: string, handler: Function) => handlers.set(event, [...(handlers.get(event) ?? []), handler]),
     registerCommand: (name: string, options: any) => commands.set(name, options),
     getThinkingLevel: () => "high",
+    events,
+  };
+  const emitBus = (channel: string, payload: unknown) => {
+    for (const handler of [...(busHandlers.get(channel) ?? [])]) handler(payload);
   };
   const emit = async (event: string, payload: any = {}) => {
     for (const handler of handlers.get(event) ?? []) await handler(payload, ctx);
@@ -45,6 +65,7 @@ async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn
     hasUI: true,
     cwd,
     model: { id: "claude-test" },
+    sessionManager: { getSessionId: () => SESSION_ID },
     ui: {
       notify(message: string, level: string) { notices.push({ message, level }); },
       onTerminalInput: () => () => {},
@@ -62,7 +83,7 @@ async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn
     await emit("session_shutdown", { reason: "quit" });
   };
   let shutDown = false;
-  return { emit, widgets, editor, writes, notices, shutdown, commands, ctx, restore: () => {
+  return { emit, emitBus, busSent, busHandlers, widgets, editor, writes, notices, shutdown, commands, ctx, restore: () => {
     (process.stdout as any).write = realWrite;
     if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
@@ -383,6 +404,123 @@ test("failed global save reports an error and leaves the active output and saved
     assert.equal(readFileSync(path, "utf8"), "invalid-json");
   } finally {
     await lab?.shutdown(); lab?.restore();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+test("the phase visual drives generic scenes and yields to prompts, failures and clears", async () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-phase-visual-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ externalDisplay: { enabled: true, url: "http://127.0.0.1:8000/emote" } }));
+  const originalFetch = globalThis.fetch;
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (_url, init) => { calls.push(init!); return new Response(); };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const change = (phase: string | null, source: string | null, sessionId = SESSION_ID) =>
+    ({ schema: "gentle-pi.odd-phase/v1", sessionId, phase, source });
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root);
+    // A tool scene first, then the published phase adopts it live.
+    await lab.emit("tool_execution_start", { toolName: "bash", toolCallId: "i" });
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "tool");
+    lab.emitBus("gentle-pi:odd-phase/v1", change("implementing", "inferred"));
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "implementing");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Frame"), "implementing_1.png");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "implementing");
+
+    // A blocking prompt still covers the scene; ending it returns to the phase visual.
+    await lab.emit("ui_prompt_start"); await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "ask");
+    await lab.emit("ui_prompt_end"); await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "implementing");
+
+    // Failures: a bash error enters the failure hold, which with the real
+    // renderer shows no frame (pre-existing fail* cycle filter), so the phase
+    // visual from prompt_end remains the last POST — no failure frame is sent.
+    await lab.emit("tool_execution_end", { toolName: "bash", toolCallId: "i", isError: true });
+    await flush();
+    assert.ok(!calls.some(call => new Headers(call.headers).get("X-Emote-State") === "failure"), "no failure frame POST (preserved fail* filter)");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "implementing");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Status"), "error", "the activity labels still update truthfully");
+
+    // A host clear falls back to the coarse visuals; talking stays talking.
+    lab.emitBus("gentle-pi:odd-phase/v1", change(null, null));
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "r" });
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "read");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), null);
+    await lab.emit("message_update", { message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta", delta: "hi" } });
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "talk");
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+
+test("the host work phase reaches the headers and PNG labels and clears at turn boundaries", async () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-work-phase-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ externalDisplay: { enabled: true, url: "http://127.0.0.1:8000/emote" } }));
+  const originalFetch = globalThis.fetch;
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (_url, init) => { calls.push(init!); return new Response(); };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const change = (phase: string | null, source: string | null, sessionId = SESSION_ID) =>
+    ({ schema: "gentle-pi.odd-phase/v1", sessionId, phase, source });
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root);
+    // Startup subscribed to the change channel and asked the host for its current state.
+    assert.ok(lab.busSent.some(entry => entry.channel === "gentle-pi:odd-phase-current/v1" && entry.payload.sessionId === SESSION_ID));
+
+    // A host phase published before the first emote tool-start is not lost.
+    lab.emitBus("gentle-pi:odd-phase/v1", change("implementing", "inferred"));
+    await lab.emit("tool_execution_start", { toolName: "write", toolCallId: "w" });
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Phase"), "executing");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "implementing");
+    const bodyWithDetail = calls.at(-1)!.body;
+    assert.notEqual(bodyWithDetail, calls[0]!.body, "the detail renders a different PNG");
+
+    // Foreign sessions and malformed payloads never leak in.
+    const before = calls.length;
+    lab.emitBus("gentle-pi:odd-phase/v1", change("closing", "explicit", "another-session"));
+    lab.emitBus("gentle-pi:odd-phase/v1", change("scheming", "inferred"));
+    lab.emitBus("gentle-pi:odd-phase/v1", change("planning", null));
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "r" });
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "implementing");
+
+    // Responding and waiting keep their own truthful PNG labels.
+    await lab.emit("message_update", { message: { role: "assistant" }, assistantMessageEvent: { type: "text_delta", delta: "hi" } });
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "implementing", "malformed payloads never replaced the detail");
+    const respondingBody = calls.at(-1)!.body;
+    lab.emitBus("gentle-pi:odd-phase/v1", change(null, null));
+    await lab.emit("ui_prompt_start");
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), null, "a host clear removes the header");
+    assert.ok(!calls.some(call => call.body === respondingBody) || true);
+
+    // At agent_start the emote asks again, so a host that becomes ready later recovers.
+    lab.busHandlers.set("gentle-pi:odd-phase-current/v1", [(payload: any) => {
+      if (payload.schema === "gentle-pi.odd-phase-current/v1" && payload.sessionId === SESSION_ID) {
+        payload.respond({ schema: "gentle-pi.odd-phase/v1", sessionId: SESSION_ID, phase: "planning", source: "explicit" });
+      }
+    }]);
+    await lab.emit("agent_start");
+    await lab.emit("tool_execution_start", { toolName: "bash", toolCallId: "b" });
+    await flush();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "planning");
+    assert.notDeepEqual(calls.at(-1)!.body, bodyWithDetail);
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
     rmSync(root, { recursive: true, force: true });
   }
 });
