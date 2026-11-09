@@ -156,6 +156,9 @@ function createRendererFromResolved(resolved: ResolvedRenderer, config: Config):
 const sameRgb = (a: Rgb, b: Rgb) => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
 
 export default function (pi: ExtensionAPI) {
+  // RPC children can have UI, but only the primary session owns avatar outputs.
+  if (process.env.GENTLE_PI_AGENTS_CHILD === "1") return;
+
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const extDir = dirname(__dirname);
 
