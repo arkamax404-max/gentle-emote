@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ExternalDisplayConfig } from "./types.ts";
 import { prepareDisplayImage } from "./display_image.ts";
+import { IdleClock, IDLE_CLOCK_TICK_MS } from "./idle_clock.ts";
+import { prepareIdleClockImage } from "./idle_clock_image.ts";
 import { isWorkPhase } from "./work_phase.ts";
 import { log } from "./log.ts";
 
@@ -13,7 +15,7 @@ export interface DisplayActivity {
   /** The host's detailed ODD work phase, when Gentle Shell published one. Optional: omitted when absent. */
   workPhase?: "authorizing" | "exploring" | "researching" | "deciding" | "planning" | "implementing" | "checking" | "closing";
 }
-type Selection = SelectedImage & { activity: DisplayActivity };
+type Selection = SelectedImage & { activity: DisplayActivity; clockAt?: number };
 const IDENTIFIER = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
 
 /** Invalid options disable networking, never local rendering. Credentials are not supported. */
@@ -103,9 +105,12 @@ export class ExternalDisplay {
   private selected: SelectedImage | null = null;
   private activity: DisplayActivity = { status: "idle", phase: "idle", activeSubagents: 0 };
   private lastKey = "";
-  // Independent of terminal caches; at most 32 prepared sprite/label combinations.
+  // Independent of terminal caches; at most 32 prepared avatar/clock images.
   private cache = new Map<string, Buffer>();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private clockTimer: ReturnType<typeof setInterval> | null = null;
+  private idleClock = new IdleClock(performance.now());
+  private lastClockQueuedAt: number | null = null;
 
   private fetcher: typeof fetch;
   private report: (message: string) => void;
@@ -114,6 +119,10 @@ export class ExternalDisplay {
     this.fetcher = fetcher;
     this.report = report;
     this.options = normalizeExternalDisplay(options);
+    if (this.options) {
+      this.clockTimer = setInterval(() => this.queueLatest(), IDLE_CLOCK_TICK_MS);
+      this.clockTimer.unref?.();
+    }
     if (options && (options as ExternalDisplayConfig).enabled && !this.options) this.warn("externalDisplay: invalid configuration; disabled");
   }
 
@@ -125,13 +134,14 @@ export class ExternalDisplay {
     if (this.disposed || paused === this.paused) return;
     this.paused = paused;
     this.lastKey = "";
+    this.lastClockQueuedAt = null;
     if (paused) {
       this.pending = null;
       if (this.timer) clearTimeout(this.timer);
       this.timer = null;
       this.active?.abort();
-    } else if (this.selected) {
-      this.select(this.selected);
+    } else {
+      this.queueLatest();
     }
   }
 
@@ -148,7 +158,8 @@ export class ExternalDisplay {
     const { workPhase, ...rest } = activity;
     this.activity = rest as DisplayActivity;
     if (isWorkPhase(workPhase)) this.activity.workPhase = workPhase;
-    if (this.selected) this.select(this.selected);
+    this.idleClock.update(this.activity, performance.now(), this.selected?.state);
+    this.queueLatest();
   }
 
   select(image: SelectedImage): void {
@@ -158,11 +169,29 @@ export class ExternalDisplay {
         this.warn("externalDisplay: unsupported frame identifier; skipped"); return;
       }
       this.selected = { ...image };
-      if (this.paused) return; // Keep the latest selection for debugOn, without sending.
-      const key = JSON.stringify([image.base64, image.state, image.frame, image.set, this.activity]);
+      this.idleClock.update(this.activity, performance.now(), image.state);
+      this.queueLatest();
+    } catch { this.warn("externalDisplay: selection failed"); }
+  }
+
+  /** Overlay only the external delivery; retain the avatar for activity/resume. */
+  private queueLatest(): void {
+    if (!this.options || this.disposed || this.paused) return;
+    try {
+      const now = performance.now();
+      const ambient = this.idleClock.isActive(now);
+      if (ambient && this.lastClockQueuedAt !== null && now - this.lastClockQueuedAt < IDLE_CLOCK_TICK_MS) return;
+      if (!ambient) this.lastClockQueuedAt = null;
+      const clockAt = ambient ? Math.floor(Date.now() / 1000) * 1000 : undefined;
+      const image = ambient
+        ? { base64: "", state: "clock", frame: "clock.png", set: "idle-clock" }
+        : this.selected;
+      if (!image) return;
+      const key = JSON.stringify([image.base64, image.state, image.frame, image.set, this.activity, clockAt]);
       if (key === this.lastKey) return;
       this.lastKey = key;
-      this.pending = { ...image, activity: { ...this.activity } };
+      if (ambient) this.lastClockQueuedAt = now;
+      this.pending = { ...image, activity: { ...this.activity }, ...(clockAt === undefined ? {} : { clockAt }) };
       if (!this.active) void this.drain();
     } catch { this.warn("externalDisplay: selection failed"); }
   }
@@ -177,10 +206,14 @@ export class ExternalDisplay {
     try {
       // The selected state is part of the prepared label, so the cache must key it:
       // the same base64 across different states renders different phase labels.
-      const cacheKey = JSON.stringify([image.base64, image.state, image.activity.status, image.activity.phase, image.activity.activeSubagents, image.activity.workPhase]);
+      const cacheKey = image.clockAt === undefined
+        ? JSON.stringify([image.base64, image.state, image.activity.status, image.activity.phase, image.activity.activeSubagents, image.activity.workPhase])
+        : `idle-clock:${image.clockAt}`;
       let body = this.cache.get(cacheKey);
       if (!body) {
-        body = prepareDisplayImage(image.base64, { ...image.activity, state: image.state }, this.options.background, this.options.backgroundCoverage, this.options.outline);
+        body = image.clockAt === undefined
+          ? prepareDisplayImage(image.base64, { ...image.activity, state: image.state }, this.options.background, this.options.backgroundCoverage, this.options.outline)
+          : prepareIdleClockImage(image.clockAt);
         if (this.cache.size >= 32) this.cache.delete(this.cache.keys().next().value!);
         this.cache.set(cacheKey, body);
       }
@@ -210,6 +243,8 @@ export class ExternalDisplay {
 
   dispose(): void {
     this.disposed = true;
+    if (this.clockTimer) clearInterval(this.clockTimer);
+    this.clockTimer = null;
     this.pending = null;
     this.selected = null;
     if (this.timer) clearTimeout(this.timer);

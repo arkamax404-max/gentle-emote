@@ -107,7 +107,7 @@ A source that is already configured keeps loading until it is updated or removed
 | `/emote` | Lists every state |
 | `/emote <state>` | Previews one state for a few seconds (tab-completes), e.g. `/emote delegate` |
 | `/emote demo` | Plays every state in sequence |
-| `/emote status` | Read-only diagnostic: the last selected PNG (state, frame and set basename), the effective work phase and its source (native bus / direct tool / none), and the coarse activity snapshot (status, phase, active subagents). Works with every output off, changes nothing and never sends anything. ASCII-only rendering with no external destination does not select new PNGs; the reported PNG is the last captured selection, or none |
+| `/emote status` | Read-only diagnostic: the last renderer-selected source PNG before any external idle-clock overlay (state, frame and set basename), the effective work phase and its source (native bus / direct tool / none), and the coarse activity snapshot (status, phase, active subagents). Works with every output off, changes nothing and never sends anything. ASCII-only rendering with no external destination does not select new PNGs; the reported PNG is the last captured selection, or none |
 | `/emote idle` | Stops a preview and goes back to rest |
 | `/emote internalOff` | Hides the terminal avatar and frees its prompt space; external PNG delivery continues |
 | `/emote internalOn` | Shows the terminal avatar again without disabling external delivery |
@@ -198,16 +198,30 @@ Run `/reload`, open the simulator in your browser, then `/emote debugOn` and `/e
 
 - **Trust:** project config can override destinations through the normal layered merge; saved `debugOn` or `displayOn` preferences allow delivery to those enabled destinations. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
 - **Options:** disabled by default; URL defaults to empty (no implicit destination). `timeoutMs` defaults to `1000` and must be finite between `1` and `30000` inclusive. Invalid options safely disable networking without disabling the local avatar.
-- **Image:** raw binary PNG, exactly 64×64, opaque black canvas with configurable transparency background inside the sprite bounds (black by default). Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. When both activity status and phase are `idle` but the active subagent count is positive, the embedded labels instead read exactly `SUBAGETNS (n)` and `RUNNING` (requested spelling); this is display-only, so internal status/phase and protocol headers remain `idle`. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared sprites.
+- **Image:** raw binary PNG, exactly 64×64. In avatar mode, an opaque black canvas with configurable transparency background inside the sprite bounds (black by default). Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. When both activity status and phase are `idle` but the active subagent count is positive, the embedded labels instead read exactly `SUBAGETNS (n)` and `RUNNING` (requested spelling); this is display-only, so internal status/phase and protocol headers remain `idle`. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared avatar/clock images.
 - **Delivery:** per destination, one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set + activity selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
-- **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. Both destinations still receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine. Subagent processes marked with `GENTLE_PI_AGENTS_CHILD=1` do not activate the extension, even when RPC reports a UI: they cannot render an avatar, send HTTP/D200 frames, or change shared output preferences. The primary session retains its normal delegation scenes and subagent count; interactive RPC hosts without the child marker remain supported.
+- **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. In avatar mode, destinations receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine. Subagent processes marked with `GENTLE_PI_AGENTS_CHILD=1` do not activate the extension, even when RPC reports a UI: they cannot render an avatar, send HTTP/D200 frames, or change shared output preferences. The primary session retains its normal delegation scenes and subagent count; interactive RPC hosts without the child marker remain supported.
 
 Optional `outline: "#ffffff"` adds a one-pixel external white silhouette to display PNGs only (not terminal art or text labels). It can be inherited from the parent or overridden per target. Transparent sprites use their alpha mask; fully opaque sprites such as the shipped set treat pure black as background. Only background connected to the outside is outlined, so enclosed holes stay untouched. Black artwork touching the external black matte cannot be distinguished from it. The outline may extend one pixel outside the sprite bounds; pixels at the top canvas edge are clipped. Omit the option to disable it.
+
+### Idle clock after five minutes
+
+**Experimental:** local functional and loopback performance checks passed, but full validation is incomplete: the global suite retains a known Windows-path failure and independent snapshot evidence could not be reconciled. No physical-device or Wi-Fi performance is claimed.
+
+After **more than five uninterrupted minutes** with both activity status and phase `idle`, enabled external screens switch to a native 64×64 clock:
+
+- Local **DD/MM/YYYY** date, stacked **24-hour** hours and minutes, larger seconds, and original pixel walkers along the bottom edge.
+- A **1 Hz** refresh target, rate-limited to at most one clock selection per second even when the source avatar animates faster. Slow receivers still use one active request and one replaceable latest pending image.
+- The same clock on every enabled simulator, LED/ESP32 destination and D200 key. Nothing enables a paused/off output, changes saved preferences or replaces the terminal avatar.
+
+Busy/error activity, a non-idle phase, a detailed work phase, active subagents or an explicit non-idle frame preview cancels the idle deadline. The idle/grandma avatar remains eligible; its separate 30-second grandma timer is unchanged. When activity resumes, the remembered avatar returns through the normal delivery queue. Reload/recreation starts a fresh deadline; elapsed idle time uses a monotonic clock rather than wall-clock time.
+
+The clock uses its own black canvas and fixed readable palette, not the avatar's transparency background, accent or silhouette outline. There are no new commands or configuration fields. `/emote status` still reports the renderer's **source avatar PNG**; receiver headers identify the delivered clock as state `clock`, frame `clock.png`, set `idle-clock`.
 
 ### Ulanzi D200 key
 
 `/emote d200On` adds a destination for the [Ulanzi D200 key client](../gentle-emote-d200) that lives next
-to the terminal: every selected frame, its labels and the outline are POSTed to
+to the terminal: selected avatar frames with labels/outline, or the idle clock, are POSTed to
 `http://127.0.0.1:8003/emote`. `/emote d200Off` disposes it.
 
 - The toggle is **global and persistent**, initially off. It never writes `config.json` or changes
@@ -225,13 +239,13 @@ to the terminal: every selected frame, its labels and the outline are POSTed to
 | Header | Value |
 |--------|-------|
 | `X-Emote-Version` | `1` |
-| `X-Emote-State` | Selected state, e.g. `think` |
+| `X-Emote-State` | Delivered state, e.g. `think`, or `clock` for the idle clock |
 | `X-Emote-Status` | `idle`, `busy`, or `error` (agent activity, independent of animation) |
 | `X-Emote-Phase` | `idle`, `thinking`, `responding`, `executing`, `waiting`, or `compacting` |
 | `X-Emote-Work-Phase` | Optional detailed ODD work phase from the native Gentle Shell bus or a successful explicit `gentle_odd_phase` call: `authorizing`, `exploring`, `researching`, `deciding`, `planning`, `implementing`, `checking`, or `closing`; omitted when neither source supplies a phase |
 | `X-Emote-Active-Subagents` | Nonnegative count of active subagent tasks (native task lifecycle when observed, otherwise in-flight tool calls) |
-| `X-Emote-Frame` | Selected filename, e.g. `think.png` |
-| `X-Emote-Set` | Actual set directory basename, never its path |
+| `X-Emote-Frame` | Selected filename, e.g. `think.png`, or `clock.png` for the idle clock |
+| `X-Emote-Set` | Actual avatar set directory basename, never its path; `idle-clock` for the synthetic clock face |
 | `X-Emote-Stream-Id` | Random UUID per sender lifetime |
 | `X-Emote-Sequence` | Increasing positive integer (1–20 digits), assigned per request |
 
