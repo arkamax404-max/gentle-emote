@@ -1,0 +1,28 @@
+{
+  "title": "Idle clock · 64 × 64 at 1 Hz",
+  "brief": "Date and time after more than five minutes of idle status and phase. Three original pixel-character directions, previewed at one update per second; physical performance is not measured here.",
+  "feature": "odd/tasks/idle-clock-display.md",
+  "artboards": [
+    {
+      "file": "01-perimeter-parade.html",
+      "title": "Perimeter parade",
+      "tradeoff": "Three tiny walkers orbit all four edges. A playful frame, with smaller date and seconds.",
+      "width": 1120,
+      "height": 900
+    },
+    {
+      "file": "02-bottom-promenade.html",
+      "title": "Bottom promenade",
+      "tradeoff": "Oversized stacked hours and minutes, larger seconds, and an upright parade confined to the lower edge.",
+      "width": 1120,
+      "height": 900
+    },
+    {
+      "file": "03-gentleman-clock.html",
+      "title": "Gentleman after hours",
+      "tradeoff": "An original miniature gentleman above a conventional clock, with one discreet border walker.",
+      "width": 1120,
+      "height": 900
+    }
+  ]
+}

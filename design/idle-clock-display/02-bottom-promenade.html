@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bottom promenade — 64 × 64 idle clock</title>
+<style>
+:root { color-scheme: dark; --page:#101715; --panel:#18231f; --ink:#f2f1dc;
+  --muted:#b0beb3; --accent:#b8f35b; --line:#40534a; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); background:var(--page);
+  font:15px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; }
+main { max-width:1120px; margin:auto; padding:36px; }
+header { margin-bottom:28px; }
+.eyebrow { color:var(--accent); font-size:12px; letter-spacing:.12em; }
+h1 { font:normal 44px/1.15 Georgia,serif; margin:10px 0; }
+p { margin:10px 0; } .lede { max-width:800px; color:var(--muted); }
+.layout { display:grid; grid-template-columns:minmax(0,540px) minmax(260px,1fr); gap:32px; }
+figure { margin:0; }
+.device { background:#000; border:1px solid var(--line); padding:12px;
+  border-radius:12px; width:fit-content; max-width:100%; }
+.zoom { position:relative; width:min(480px,70vw); aspect-ratio:1; }
+canvas { display:block; image-rendering:pixelated; }
+.zoom canvas { width:100%; height:100%; }
+.zoom.grid::after { content:""; position:absolute; inset:0; pointer-events:none;
+  background-image:linear-gradient(to right,#ffffff18 1px,transparent 1px),
+    linear-gradient(to bottom,#ffffff18 1px,transparent 1px);
+  background-size:calc(100% / 64) calc(100% / 64); }
+figcaption { color:var(--muted); font-size:12px; margin-top:10px; }
+aside { padding:8px 0; } h2 { font-size:15px; color:var(--accent); margin:0 0 10px; }
+.card { background:var(--panel); padding:18px; border:1px solid var(--line); margin-bottom:16px; }
+ul { padding-left:20px; color:var(--muted); } li { margin:8px 0; }
+.native { display:flex; gap:16px; align-items:center; }
+.native canvas { width:64px; height:64px; flex:none; }
+.native p { font-size:12px; color:var(--muted); }
+.controls { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px; }
+button { color:var(--ink); background:var(--panel); border:1px solid var(--line);
+  padding:10px 12px; cursor:pointer; font:inherit; font-size:12px; }
+button:hover { border-color:var(--accent); }
+button:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+time { display:block; color:var(--ink); margin:10px 0; font-variant-numeric:tabular-nums; }
+.notice { font-size:12px; color:var(--muted); max-width:760px; margin-top:22px; }
+@media(max-width:760px) { main { padding:20px; } h1 { font-size:32px; }
+ .layout { grid-template-columns:1fr; } .zoom { width:min(480px,calc(100vw - 66px)); } }
+@media(prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto; } }
+</style>
+</head>
+<body>
+<main>
+<header>
+<div class="eyebrow">DIRECTION 02 · NATIVE 64 × 64 · ONE UPDATE / SECOND</div>
+<h1>Bottom promenade</h1>
+<p class="lede">Oversized stacked hours and minutes, larger seconds, and an upright parade confined to the lower edge.</p>
+</header>
+<div class="layout">
+<figure>
+<div class="device"><div class="zoom" id="zoom">
+<canvas id="display" width="64" height="64" role="img" aria-label="Animated 64 by 64 pixel date and time design"></canvas>
+</div></div>
+<figcaption>A real 64 × 64 buffer, enlarged without smoothing. No higher-resolution text is baked into the device face.</figcaption>
+<div class="controls">
+<button id="motion" type="button" aria-pressed="false">Pause walkers</button>
+<button id="grid" type="button" aria-pressed="false">Show pixel grid</button>
+</div>
+</figure>
+<aside>
+<section class="card"><h2>The actual pixel budget</h2>
+<div class="native"><canvas id="native" width="64" height="64" aria-hidden="true"></canvas>
+<p>Native 1:1 preview.<br>64 pixels wide, 64 pixels tall.</p></div>
+<time id="readout"></time>
+<p>Largest digits and calmer movement. Time reads in two rows rather than one conventional line.</p>
+</section>
+<section class="card"><h2>Proposed idle behaviour</h2>
+<ul><li>Enter after more than five uninterrupted minutes of idle status and idle phase.</li>
+<li>Proposed guard: do not conceal active background subagents.</li>
+<li>Return to the avatar when activity resumes.</li>
+<li>Local time, 24-hour format; date is DD/MM/YYYY.</li>
+<li>Seconds and walker steps change once per second. Reduced motion stops the walkers, not the clock.</li></ul>
+</section>
+</aside>
+</div>
+<p class="notice">Visual proposal only. These original pixel characters are not copied game assets. Browser cadence is 1 Hz; this is not a measurement of PNG encoding, HTTP delivery or physical hardware. Normal emote output has not been changed.</p>
+<noscript>This self-contained visual preview requires JavaScript to draw its 64 × 64 pixel buffer.</noscript>
+</main>
+<script>
+'use strict';
+const DIRECTION = 2;
+const display = document.getElementById('display');
+const native = document.getElementById('native');
+const ctx = display.getContext('2d');
+const nativeCtx = native.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+nativeCtx.imageSmoothingEnabled = false;
+const C = { black:'#000000', white:'#f2f1dc', muted:'#93b5a0', green:'#b8f35b',
+  blue:'#55bde8', skin:'#f4c38c', amber:'#f1bd65', path:'#294b36', hat:'#849d95' };
+const FONT = {
+ '0':['111','101','101','101','111'], '1':['010','110','010','010','111'],
+ '2':['111','001','111','100','111'], '3':['111','001','111','001','111'],
+ '4':['101','101','111','001','001'], '5':['111','100','111','001','111'],
+ '6':['111','100','111','101','111'], '7':['111','001','010','010','010'],
+ '8':['111','101','111','101','111'], '9':['111','101','111','001','111'],
+ ':':['000','010','000','010','000'], '/':['001','001','010','100','100'],
+ 'I':['111','010','010','010','111'], 'D':['110','101','101','101','110'],
+ 'L':['100','100','100','100','111'], 'E':['111','100','110','100','111']
+};
+function rect(x,y,w,h,color) { ctx.fillStyle=color; ctx.fillRect(x,y,w,h); }
+function text(value,x,y,scale,color) {
+ for (let i=0;i<value.length;i++) {
+  const glyph=FONT[value[i]]; if (!glyph) continue;
+  glyph.forEach((row,dy)=>[...row].forEach((bit,dx)=>{
+   if(bit==='1') rect(x+(i*4+dx)*scale,y+dy*scale,scale,scale,color);
+  }));
+ }
+}
+function centered(value,y,scale,color) {
+ text(value,Math.floor((64-(value.length*4-1)*scale)/2),y,scale,color);
+}
+function walker(x,y,step,turn=0) {
+ const rows=[' GGG ','GGSS ','  SS ',' BBB ',' BBB ','  B  ',
+  step%2 ? ' W W ' : '  WW ', step%2 ? 'W   W' : ' W W '];
+ const colors={G:C.green,S:C.skin,B:C.blue,W:C.white};
+ rows.forEach((row,sy)=>[...row].forEach((pixel,sx)=>{
+  if(!colors[pixel]) return;
+  let px=sx+1,py=sy;
+  if(turn===1) [px,py]=[7-py,px];
+  if(turn===2) [px,py]=[7-px,7-py];
+  if(turn===3) [px,py]=[py,7-px];
+  rect(x+px,y+py,1,1,colors[pixel]);
+ }));
+}
+function orbit(step,offset) {
+ const p=((step*2+offset)%220+220)%220;
+ let cx,cy,turn;
+ if(p<55) { cx=4+p;cy=4;turn=0; }
+ else if(p<110) { cx=59;cy=4+p-55;turn=1; }
+ else if(p<165) { cx=59-(p-110);cy=59;turn=2; }
+ else { cx=4;cy=59-(p-165);turn=3; }
+ walker(cx-4,cy-4,step,turn);
+}
+function gentleman() {
+ rect(27,9,10,4,C.hat); rect(24,13,16,2,C.white);
+ rect(27,15,10,10,C.skin); rect(26,17,1,5,C.skin); rect(37,17,1,5,C.skin);
+ rect(29,18,2,1,C.black); rect(34,18,2,1,C.black);
+ rect(28,22,3,1,C.white); rect(33,22,3,1,C.white); rect(30,23,4,1,C.white);
+ rect(26,26,12,2,C.white); rect(29,27,2,2,C.amber); rect(33,27,2,2,C.amber);
+}
+const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+let paused=reduced.matches;
+let lastStep=0;
+let frozenStep=0;
+function updateMotionButton() {
+ document.getElementById('motion').textContent=paused?'Resume walkers':'Pause walkers';
+ document.getElementById('motion').setAttribute('aria-pressed',String(paused));
+}
+function render() {
+ if(document.hidden) return;
+ const now=new Date();
+ const pad=n=>String(n).padStart(2,'0');
+ const hh=pad(now.getHours()), mm=pad(now.getMinutes()), ss=pad(now.getSeconds());
+ const date=pad(now.getDate())+'/'+pad(now.getMonth()+1)+'/'+now.getFullYear();
+ const step=paused?frozenStep:Math.floor(now.getTime()/1000);
+ lastStep=step;
+ rect(0,0,64,64,C.black);
+ if(DIRECTION===1) {
+  rect(0,0,64,1,C.path);rect(0,63,64,1,C.path);
+  rect(0,0,1,64,C.path);rect(63,0,1,64,C.path);
+  centered('IDLE',13,1,C.muted);
+  centered(hh+':'+mm,23,2,C.white);
+  centered(':'+ss,36,1,C.amber);
+  centered(date,46,1,C.green);
+  [0,73,146].forEach(offset=>orbit(step,offset));
+ } else if(DIRECTION===2) {
+  centered(date,1,1,C.muted);
+  text(hh,12,9,4,C.white);text(mm,12,31,4,C.blue);
+  text(':',43,35,1,C.amber);text(ss,46,33,2,C.amber);
+  rect(0,63,64,1,C.path);
+  for(let x=0;x<64;x+=8) rect(x,63,3,1,C.green);
+  [0,40].forEach(offset=>walker(((step*2+offset)%80)-8,55,step));
+ } else {
+  centered('IDLE',1,1,C.muted);
+  gentleman();
+  centered(hh+':'+mm,33,2,C.white);text(ss,55,38,1,C.amber);
+  centered(date,47,1,C.amber);
+  rect(0,63,64,1,C.path);
+  walker(((step*2)%80)-8,55,step);
+ }
+ nativeCtx.clearRect(0,0,64,64);
+ nativeCtx.drawImage(display,0,0);
+ const readout=document.getElementById('readout');
+ readout.textContent=date+' · '+hh+':'+mm+':'+ss+' · local time';
+ readout.dateTime=now.toISOString();
+}
+document.getElementById('motion').addEventListener('click',()=>{
+ frozenStep=lastStep;paused=!paused;updateMotionButton();render();
+});
+document.getElementById('grid').addEventListener('click',event=>{
+ const visible=document.getElementById('zoom').classList.toggle('grid');
+ event.currentTarget.setAttribute('aria-pressed',String(visible));
+ event.currentTarget.textContent=visible?'Hide pixel grid':'Show pixel grid';
+});
+reduced.addEventListener('change',event=>{
+ frozenStep=lastStep;paused=event.matches;updateMotionButton();render();
+});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden) render();});
+updateMotionButton();
+render();
+setInterval(render,1000);
+</script>
+</body>
+</html>
