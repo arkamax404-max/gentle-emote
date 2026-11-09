@@ -25,6 +25,7 @@ import { readYoloRest } from "./yolo.ts";
 import { ExternalDisplay, ExternalDisplays, type SelectedImage } from "./external_display.ts";
 import { createD200Display, d200Url } from "./d200_display.ts";
 import { DisplayActivityTracker } from "./display_activity.ts";
+import { SubagentTaskTracker } from "./subagent_activity.ts";
 import { ODD_PHASE_CHANGE_EVENT, ODD_PHASE_CURRENT_EVENT, WorkPhaseTracker, isWorkPhase } from "./work_phase.ts";
 import type { WorkPhase } from "./work_phase.ts";
 import { OutputStateStore, OUTPUTS } from "./output_state.ts";
@@ -186,6 +187,10 @@ export default function (pi: ExtensionAPI) {
   const displayActivity = new DisplayActivityTracker(activity => {
     externalDisplay?.updateActivity(activity);
     d200Display?.updateActivity(activity);
+  });
+  /** Native subagent task lifecycle (Gentle Shell bus); null falls back to the call-based count. */
+  const subagentTasks = new SubagentTaskTracker(count => {
+    displayActivity.setNativeSubagents(count);
   });
   /** Detailed host phase (Gentle Shell only); display detail alongside the coarse activity. */
   const workPhase = new WorkPhaseTracker(() => applyWorkPhase());
@@ -425,6 +430,11 @@ export default function (pi: ExtensionAPI) {
     workPhase.attach((pi as { events?: unknown }).events, sessionId());
   }
 
+  /** Subscribe to the host's native subagent task lifecycle for this session. */
+  function attachSubagentTasks(): void {
+    subagentTasks.attach((pi as { events?: unknown }).events, sessionId());
+  }
+
   /** Activity transitions are suppressed while the goodbye animation owns the avatar. */
   function show(state: EmoteState) {
     if (!widgetActive || farewell) return;
@@ -578,6 +588,7 @@ export default function (pi: ExtensionAPI) {
     displayActivity.reset();
     directWorkPhase = null;
     attachWorkPhase();
+    attachSubagentTasks();
     lastResolved = resolveRenderer(config.terminals, userConfiguredTerminals);
     renderer.dispose();
     renderer = internalVisible ? createRendererFromResolved(lastResolved, config) : new PngSelectionRenderer();
@@ -635,6 +646,7 @@ export default function (pi: ExtensionAPI) {
     }
     animator.setTui(null);
     workPhase.dispose();
+    subagentTasks.dispose();
     directWorkPhase = null;
   });
 
@@ -668,6 +680,7 @@ export default function (pi: ExtensionAPI) {
     displayActivity.reset();
     animator.setWorkPhase(null);
     attachWorkPhase();
+    attachSubagentTasks();
     displayActivity.set("busy", "thinking");
     clearPreview();
     runHadError = false;

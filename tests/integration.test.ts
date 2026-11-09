@@ -407,6 +407,7 @@ test("failed global save reports an error and leaves the active output and saved
     rmSync(root, { recursive: true, force: true });
   }
 });
+
 test("the phase visual drives generic scenes and yields to prompts, failures and clears", async () => {
   const root = mkdtempSync(join(tmpdir(), "emote-phase-visual-"));
   const dir = join(root, ".pi", "extensions", "gentle-emote");
@@ -461,6 +462,93 @@ test("the phase visual drives generic scenes and yields to prompts, failures and
   }
 });
 
+test("native subagent task events drive the active-subagent header and PNG and survive turn boundaries", async () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-native-subagents-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ externalDisplay: { enabled: true, url: "http://127.0.0.1:8000/emote" } }));
+  const originalFetch = globalThis.fetch;
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (_url, init) => { calls.push(init!); return new Response(); };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const subagentEvent = (status: string, sequence: number, overrides: Record<string, unknown> = {}) => ({
+    source: "subagent", producerId: "producer-1", sessionId: SESSION_ID, parentSessionId: SESSION_ID,
+    taskId: "t1", runId: "producer-1:run-1", status, event: `subagent.${status}`, sequence, occurredAt: 5, ...overrides,
+  });
+  const header = (init: RequestInit, name: string) => new Headers(init.headers).get(name);
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root);
+    // Establish a selected frame first, then check the call-based fallback.
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "r" });
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "0");
+    await lab.emit("tool_execution_start", { toolName: "subagent_run", toolCallId: "s1", args: { agent: "explore" } });
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1");
+    await lab.emit("tool_execution_end", { toolName: "subagent_run", toolCallId: "s1", isError: false });
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "0");
+
+    // The native lifecycle publishes transitions for background tasks; the
+    // queued task counts even though no tool call is open.
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("queued", 1));
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1");
+    const bodyWithTask = calls.at(-1)!.body;
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("running", 2));
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1");
+
+    // agent_end/agent_start reset the turn but not the native task count.
+    await lab.emit("agent_end");
+    await lab.emit("agent_start");
+    await lab.emit("tool_execution_start", { toolName: "bash", toolCallId: "b" });
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1", "the native count survives turn boundaries");
+
+    // A second concurrent task counts alongside the first.
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("queued", 4, { taskId: "t2", runId: "producer-1:run-2" }));
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "2", "two concurrent native tasks");
+
+    // Completion clears the count and changes the posted PNG label.
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("completed", 5));
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1");
+    assert.notEqual(calls.at(-1)!.body, bodyWithTask, "the PNG label is re-rendered");
+
+    // Foreign-session and malformed events never mutate the counter.
+    const before = calls.length;
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("queued", 6, { sessionId: "another-session", taskId: "t9" }));
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("queued", 0));
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("queued", 7, { source: "tool" }));
+    await lab.emit("tool_execution_start", { toolName: "read", toolCallId: "r2" });
+    await flush();
+    assert.ok(calls.length > before);
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1", "foreign and malformed events leave the count untouched");
+
+    // Once native was observed, call bookkeeping no longer sums into the count.
+    await lab.emit("tool_execution_start", { toolName: "subagent_run", toolCallId: "s2" });
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1");
+
+    // Re-emitting an already active task changes nothing; waiting keeps it;
+    // failure clears it and the count reaches zero.
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("queued", 8, { taskId: "t2", runId: "producer-1:run-2" }));
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1");
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("waiting", 9, { taskId: "t2", runId: "producer-1:run-2" }));
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "1", "waiting counts the same task once");
+    lab.emitBus(SUBAGENT_CHANNEL, subagentEvent("failed", 10, { taskId: "t2", runId: "producer-1:run-2" }));
+    await flush();
+    assert.equal(header(calls.at(-1)!, "X-Emote-Active-Subagents"), "0");
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("the host work phase reaches the headers and PNG labels and clears at turn boundaries", async () => {
   const root = mkdtempSync(join(tmpdir(), "emote-work-phase-"));
