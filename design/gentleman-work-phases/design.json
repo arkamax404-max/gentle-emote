@@ -1,0 +1,21 @@
+{
+  "title": "Gentleman work phases",
+  "brief": "One approval sheet for eight gentle-pi work phases, with English state names and the existing Gentleman pixel-art identity. Existing frames are references, not final new assets.",
+  "artboards": [
+    {
+      "file": "01-phase-sheet.html",
+      "title": "Character-first phase sheet",
+      "tradeoff": "Preserves the current identity using existing reference frames; distinct final poses and props remain to be drawn.",
+      "width": 1440,
+      "height": 1150
+    },
+    {
+      "file": "02-native-preview.html",
+      "title": "Native animated sprite demo",
+      "tradeoff": "Interactive view of the actual32 PNGs and shipped timing; preview-only, not a live extension or independent technical review.",
+      "width": 1200,
+      "height": 1100
+    }
+  ],
+  "feature": "odd/tasks/work-phase-artwork.md"
+}

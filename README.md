@@ -56,6 +56,25 @@ The subagent scene comes from the `agent` argument of the tool call, so a new ag
 
 The subagent scenes, `jobs`, `yolo`, `super-yolo` and `remember` need the matching Gentle Shell tools or the Engram extension. Without them those states simply never trigger; the rest works the same in plain Pi.
 
+### Work-phase visuals
+
+When Gentle Shell publishes its detailed ODD work phase on the shared event bus, the eight host phases re-skin the generic `think`/`read`/`write`/`tool` scenes with dedicated frames, without changing the logical activity:
+
+| Phase | Visual |
+|-------|--------|
+| `authorizing` | reviewing an approval card, then stamping it |
+| `exploring` | sweeping a magnifying glass over footprints |
+| `researching` | an open reference book, pages turning |
+| `deciding` | two choice cards, weighed one at a time |
+| `planning` | drawing the approach on a blueprint |
+| `implementing` | both hands on the keyboard, code flying |
+| `checking` | a clipboard checklist filling with green checks |
+| `closing` | presenting the completed-work folder |
+
+The override applies only to those four generic scenes: blocking prompts (`ask`), failures, compaction, talking, idle and delegation keep their own truthful visuals, clearing both native and direct phases returns the coarse scene, and a set without frames for a phase falls back to the generic scene. The external display mirrors the phase frames and keeps the `X-Emote-Work-Phase` header (see [Receiver protocol](#receiver-protocol-v1)).
+
+Outside Gentle Shell (plain Pi, other hosts), the same visuals can be driven explicitly: when a successful `gentle_odd_phase` tool call ends, its `phase` argument (`authorizing` … `closing`, or `clear`) is adopted as a direct fallback — the PNG folder, the frame sink and the `X-Emote-Work-Phase` header all use that phase. The native bus phase always wins: a direct adoption never overrides it, a direct `clear` never erases it, and a host clear only reveals the direct fallback named during the current turn. The direct phase is dropped at turn and session boundaries, so a stale phase never leaks into the next turn. `/emote <phase>` manual previews are unchanged, and nothing is inferred automatically — only an explicit successful call names a phase.
+
 Want a different character? [Create your own avatar](#create-your-own-avatar).
 
 ## Install
@@ -88,6 +107,7 @@ A source that is already configured keeps loading until it is updated or removed
 | `/emote` | Lists every state |
 | `/emote <state>` | Previews one state for a few seconds (tab-completes), e.g. `/emote delegate` |
 | `/emote demo` | Plays every state in sequence |
+| `/emote status` | Read-only diagnostic: the last selected PNG (state, frame and set basename), the effective work phase and its source (native bus / direct tool / none), and the coarse activity snapshot (status, phase, active subagents). Works with every output off, changes nothing and never sends anything. ASCII-only rendering with no external destination does not select new PNGs; the reported PNG is the last captured selection, or none |
 | `/emote idle` | Stops a preview and goes back to rest |
 | `/emote internalOff` | Hides the terminal avatar and frees its prompt space; external PNG delivery continues |
 | `/emote internalOn` | Shows the terminal avatar again without disabling external delivery |
@@ -178,9 +198,9 @@ Run `/reload`, open the simulator in your browser, then `/emote debugOn` and `/e
 
 - **Trust:** project config can override destinations through the normal layered merge; saved `debugOn` or `displayOn` preferences allow delivery to those enabled destinations. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
 - **Options:** disabled by default; URL defaults to empty (no implicit destination). `timeoutMs` defaults to `1000` and must be finite between `1` and `30000` inclusive. Invalid options safely disable networking without disabling the local avatar.
-- **Image:** raw binary PNG, exactly 64×64, opaque black canvas with configurable transparency background inside the sprite bounds (black by default). Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared sprites.
+- **Image:** raw binary PNG, exactly 64×64, opaque black canvas with configurable transparency background inside the sprite bounds (black by default). Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. When both activity status and phase are `idle` but the active subagent count is positive, the embedded labels instead read exactly `SUBAGETNS (n)` and `RUNNING` (requested spelling); this is display-only, so internal status/phase and protocol headers remain `idle`. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared sprites.
 - **Delivery:** per destination, one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set + activity selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
-- **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. Both destinations still receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine.
+- **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. Both destinations still receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine. Subagent processes marked with `GENTLE_PI_AGENTS_CHILD=1` do not activate the extension, even when RPC reports a UI: they cannot render an avatar, send HTTP/D200 frames, or change shared output preferences. The primary session retains its normal delegation scenes and subagent count; interactive RPC hosts without the child marker remain supported.
 
 Optional `outline: "#ffffff"` adds a one-pixel external white silhouette to display PNGs only (not terminal art or text labels). It can be inherited from the parent or overridden per target. Transparent sprites use their alpha mask; fully opaque sprites such as the shipped set treat pure black as background. Only background connected to the outside is outlined, so enclosed holes stay untouched. Black artwork touching the external black matte cannot be distinguished from it. The outline may extend one pixel outside the sprite bounds; pixels at the top canvas edge are clipped. Omit the option to disable it.
 
@@ -208,13 +228,16 @@ to the terminal: every selected frame, its labels and the outline are POSTed to
 | `X-Emote-State` | Selected state, e.g. `think` |
 | `X-Emote-Status` | `idle`, `busy`, or `error` (agent activity, independent of animation) |
 | `X-Emote-Phase` | `idle`, `thinking`, `responding`, `executing`, `waiting`, or `compacting` |
-| `X-Emote-Active-Subagents` | Nonnegative count of observed in-flight subagent tool calls |
+| `X-Emote-Work-Phase` | Optional detailed ODD work phase from the native Gentle Shell bus or a successful explicit `gentle_odd_phase` call: `authorizing`, `exploring`, `researching`, `deciding`, `planning`, `implementing`, `checking`, or `closing`; omitted when neither source supplies a phase |
+| `X-Emote-Active-Subagents` | Nonnegative count of active subagent tasks (native task lifecycle when observed, otherwise in-flight tool calls) |
 | `X-Emote-Frame` | Selected filename, e.g. `think.png` |
 | `X-Emote-Set` | Actual set directory basename, never its path |
 | `X-Emote-Stream-Id` | Random UUID per sender lifetime |
 | `X-Emote-Sequence` | Increasing positive integer (1–20 digits), assigned per request |
 
-Activity-only changes regenerate the PNG labels and resend it, even when the sprite has not changed. These additive v1 headers contain no reasoning text or tool arguments. Subagent counts track `subagent_run/continue/reply` calls (including MCP-prefixed names), not detached background jobs after a call returns; counts reset at agent boundaries. The receiver can display the PNG directly without drawing status/phase text itself. Counts above 999 display as `(999+)`; the header retains the exact count. Older receivers can ignore these headers.
+Activity-only changes regenerate the PNG labels and resend it, even when the sprite has not changed. These additive v1 headers contain no reasoning text or tool arguments. Subagent counts come from Gentle Shell's native task lifecycle bus (`gentle-pi:notification:source`, statuses `queued`/`running`/`waiting` active and `completed`/`failed`/`cancelled`/`timed_out` terminal): once a transition was observed for the current session that count is authoritative, it is not summed with tool calls, survives agent boundaries and compaction, and only an actual session change clears it. On hosts without the bus (or before the first transition), the count falls back to observed `subagent_run/continue/reply` calls (including MCP-prefixed names) as before, resetting at agent boundaries. Restore is silent — there is no snapshot or replay — so tasks queued before the subscription (a reload, or a start mid-task) become visible only at their next emitted transition. Foreign-session, malformed and duplicate/out-of-order notifications never mutate the count, and a finished task can never be resurrected by a late event. The receiver can display the PNG directly without drawing status/phase text itself. Counts above 999 display as `(999+)`; the header retains the exact count. Older receivers can ignore these headers.
+
+When a detailed ODD work phase is available from the native Gentle Shell bus or the explicit tool fallback, the phase label embedded in the PNG (and the optional `X-Emote-Work-Phase` header) shows that detail instead of the coarse `thinking`/`executing` label; truthful emote states (`waiting`, `compacting`, `responding`, `idle`) keep their own label. The native phase takes priority. The selected frame's own state is the most truthful source: a selected state that names one of the eight phases labels the embedded PNG regardless of the coarse label — even with no published phase and even under `idle` (headers stay coarse). The direct fallback clears at agent boundaries; without either source, PNG labels and headers fall back to the coarse activity. A host without the phase bus can still use the fallback if it provides the `gentle_odd_phase` tool; this extension does not register that tool.
 
 Identifiers must match `[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}`. Unsupported custom names are skipped and reported without affecting local rendering. Delivery failures, timeouts and HTTP rejections are silent in the UI and logged only when `debug` is enabled. Configuration and unsupported-identifier errors still produce warnings. Diagnostics never include payloads or the destination URL.
 
