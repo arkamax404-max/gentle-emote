@@ -15,12 +15,14 @@ All notable changes to gentle-emote will be documented in this file. Entries bef
 - **Persistent output preferences** — every On/Off command (`internal`, `debug`, `d200`, `display`) saves its own global boolean under `<agent dir>/extensions/gentle-emote/output-states/<output>.json`; choices survive restarts, `/reload` and project changes, and running sessions restore them at their next start/reload.
 
 ### Changed
+- **Complete demo sequence** — `/emote demo` keeps the original scenes and now includes all eight ODD work phases. These visual previews do not publish a work phase or change agent activity.
 - **Selected-state phase label** — the external display PNG's phase row now describes every registered selected image state from `/emote demo`, under any coarse activity or published work phase. Action labels use uppercase -ing forms: `THINKING`, `TALKING`, `READING`, `WRITING`, `COMPACTING`, `ASKING`, `DELEGATING`, `REMEMBERING`, `EXPLORING`, `BUILDING`, `VERIFYING`, `JUDGING` and `REVIEWING`. The eight ODD phase labels (for example `PLANNING`) and nonverbs (including `SUPER-YOLO` with its hyphen) stay unchanged. This is display-only: commands such as `/emote write`, internal state names, `/emote demo` names and protocol headers such as `X-Emote-State: write` are not renamed. Without a registered selection, the existing coarse/work-phase fallback remains. The `SUBAGENTS (n)` / `RUNNING` exception with both labels idle and active subagents still wins; artwork, status/count styling and the idle clock are unchanged.
 - **Idle parent with active subagents** — when both activity status and phase are `idle` and at least one subagent is active, display labels read exactly `SUBAGENTS (n)` and `RUNNING`. The yellow count and `999+` cap are preserved; internal state, headers and sprite selection do not change.
 - **All outputs default off** — after install or reload, run the matching On command (`/emote internalOn`, `debugOn`, `d200On`, `displayOn`) to see or send anything; previously the avatar was visible by default.
 - **README troubleshooting** — what to do when `/emote` does not list a new command: `/reload` restarts the installed version but does not update it.
 
 ### Fixed
+- **Startup greeting ownership** — previews (including explicit idle), agent activity, compaction, blocking prompts, farewells and tool errors cancel the pending 500 ms greeting. Returning to idle before the deadline no longer lets a stale greeting take over; untouched idle startup still greets.
 - **Subagent display spelling** — corrected `SUBAGETNS` to `SUBAGENTS` in the external display status label; `RUNNING`, count colors, the `999+` cap and protocol headers are unchanged.
 
 ## gentle-emote v0.1.4

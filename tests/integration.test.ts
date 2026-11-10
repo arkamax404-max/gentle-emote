@@ -209,6 +209,55 @@ test("the 500ms startup greeting does not replace an active tool or its prompt r
   }
 });
 
+for (const ownership of ["idle preview", "read preview", "agent_start", "session_compact", "UI prompt", "host blocked prompt", "farewell", "direct tool error"] as const) {
+  test(`startup greeting is cancelled by ${ownership} before 500ms`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    let lab: Awaited<ReturnType<typeof boot>> | undefined;
+    try {
+      lab = await boot(undefined, []);
+      const emote = lab.commands.get("emote");
+      const status = async () => {
+        await emote.handler("status", lab!.ctx);
+        return lab!.notices.at(-1)!.message;
+      };
+      t.mock.timers.tick(100);
+      if (ownership === "idle preview") await emote.handler("idle", lab.ctx);
+      else if (ownership === "read preview") await emote.handler("read", lab.ctx);
+      else if (ownership === "agent_start") await lab.emit("agent_start");
+      else if (ownership === "session_compact") await lab.emit("session_compact");
+      else if (ownership === "UI prompt") {
+        await lab.emit("ui_prompt_start");
+        assert.match(await status(), /PNG state=ask /);
+        await lab.emit("ui_prompt_end");
+        assert.match(await status(), /PNG state=idle /, "closing the prompt restores idle");
+      } else if (ownership === "host blocked prompt") {
+        lab.emitBus("herdr:blocked", { active: true });
+        assert.match(await status(), /PNG state=ask /);
+        lab.emitBus("herdr:blocked", { active: false });
+        assert.match(await status(), /PNG state=idle /, "closing the host prompt restores idle");
+      } else if (ownership === "farewell") {
+        await lab.emit("input", { text: "goodbye" });
+        assert.match(await status(), /PNG state=bye /);
+      } else {
+        // No preceding tool-start: the error handler must claim ownership itself.
+        await lab.emit("tool_execution_end", { toolName: "bash", toolCallId: "direct-error", isError: true });
+        assert.match(await status(), /activity status=error phase=thinking activeSubagents=0$/);
+      }
+      const before = await status();
+      assert.doesNotMatch(before, /PNG state=hi /);
+      t.mock.timers.tick(399);
+      assert.doesNotMatch(await status(), /PNG state=hi /, "no early greeting");
+      t.mock.timers.tick(1);
+      const after = await status();
+      assert.doesNotMatch(after, /PNG state=hi /, "ownership cancels the greeting even when the logical state is idle again");
+      assert.equal(after, before, "the deadline does not change the selected state, phase or activity");
+    } finally {
+      await lab?.shutdown(); lab?.restore();
+      t.mock.timers.reset();
+    }
+  });
+}
+
 test("an idle session still greets at the 500ms startup deadline", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const root = mkdtempSync(join(tmpdir(), "emote-greeting-idle-"));

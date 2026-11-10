@@ -26,7 +26,7 @@ import { ExternalDisplay, ExternalDisplays, type SelectedImage, type FrameSink }
 import { createD200Display, d200Url } from "./d200_display.ts";
 import { DisplayActivityTracker } from "./display_activity.ts";
 import { SubagentTaskTracker } from "./subagent_activity.ts";
-import { ODD_PHASE_CHANGE_EVENT, ODD_PHASE_CURRENT_EVENT, WorkPhaseTracker, isWorkPhase } from "./work_phase.ts";
+import { ODD_PHASE_CHANGE_EVENT, ODD_PHASE_CURRENT_EVENT, WORK_PHASES, WorkPhaseTracker, isWorkPhase } from "./work_phase.ts";
 import type { WorkPhase } from "./work_phase.ts";
 import { OutputStateStore, OUTPUTS } from "./output_state.ts";
 
@@ -61,6 +61,7 @@ const PREVIEW_LOOPING_STATES = new Set<EmoteState>([
 ]);
 const DEMO_SEQUENCE: EmoteState[] = [
   "hi", "think", "talk", "read", "tool", "delegate", "explore", "build", "verify", "judge", "review", "jira",
+  ...WORK_PHASES,
   "write", "jobs", "remember", "ask", "success", "failure", "compact", "yolo", "super-yolo", "grandma", "bye",
 ];
 const EMOTE_DESCRIPTIONS: Record<string, string> = {
@@ -96,7 +97,7 @@ const EMOTE_DESCRIPTIONS: Record<string, string> = {
   implementing: "types on the keyboard, code flying (host ODD phase)",
   checking: "fills a checklist with green checks (host ODD phase)",
   closing: "presents the completed-work folder (host ODD phase)",
-  demo: "plays every state in a row",
+  demo: "plays the original scenes and all eight ODD work phases in a row",
   internalOn: "show the terminal avatar (external delivery stays active)",
   internalOff: "hide the terminal avatar (external delivery stays active)",
   status: "show the last selected PNG, work phase source and activity snapshot (read-only diagnostic)",
@@ -352,7 +353,13 @@ export default function (pi: ExtensionAPI) {
     watchedBannerFiles = [];
   }
 
+  /** Once another event owns the avatar, startup must not greet later. */
+  function cancelGreeting() {
+    if (greetTimer) { clearTimeout(greetTimer); greetTimer = null; }
+  }
+
   function startFarewell() {
+    cancelGreeting();
     farewell = true;
     if (farewellTimer) { clearTimeout(farewellTimer); farewellTimer = null; }
     if (animator.currentState !== "bye") animator.transitionTo("bye");
@@ -452,6 +459,7 @@ export default function (pi: ExtensionAPI) {
   /** Activity transitions are suppressed while the goodbye animation owns the avatar. */
   function show(state: EmoteState) {
     if (!widgetActive || farewell) return;
+    cancelGreeting();
     if (animator.currentState !== state) animator.transitionTo(state);
   }
 
@@ -492,6 +500,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   function previewState(state: EmoteState) {
+    cancelGreeting();
     clearPreview();
     if (farewellTimer) { clearTimeout(farewellTimer); farewellTimer = null; }
     farewell = false;
@@ -602,6 +611,7 @@ export default function (pi: ExtensionAPI) {
     log(`session_start: hasUI=${ctx.hasUI}`);
     if (!ctx.hasUI) return;
 
+    cancelGreeting();
     animator.clearAllTimers();
     cwd = ctx.cwd;
     ({ config, userConfiguredTerminals } = loadLayeredConfig(extDir, cwd));
@@ -654,7 +664,7 @@ export default function (pi: ExtensionAPI) {
 
     widgetActive = true;
     watchYolo(ctx);
-    if (greetTimer) clearTimeout(greetTimer);
+    cancelGreeting();
     greetTimer = setTimeout(() => {
       greetTimer = null;
       if (widgetActive && animator.currentState === "idle") animator.transitionTo("hi");
@@ -662,7 +672,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
-    if (greetTimer) { clearTimeout(greetTimer); greetTimer = null; }
+    cancelGreeting();
     clearPreview();
     unwatchYolo();
     animator.stop();
@@ -708,6 +718,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_start", async () => {
+    cancelGreeting();
     // The tracker reset drops any stale detail from the previous turn; the
     // handshake recovers the host's current phase (order-safe: a host event
     // that arrives first is re-requested, and a host clear before this reset
@@ -767,6 +778,7 @@ export default function (pi: ExtensionAPI) {
     displayActivity.toolEnd(event.toolCallId, event.isError);
     if (farewell) return;
     if (event.isError) {
+      cancelGreeting();
       runHadError = true;
       animator.setHoldNextState("think");
       const scene = toolNameToState(event.toolName, event.args);
@@ -778,6 +790,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("ui_prompt_start", async () => {
     if (!widgetActive) return;
+    cancelGreeting();
     displayActivity.set("busy", "waiting");
     animator.beginPrompt();
   });
@@ -792,8 +805,10 @@ export default function (pi: ExtensionAPI) {
     if (!widgetActive) return;
     const active = !!data && typeof data === "object" && (data as { active?: unknown }).active === true;
     displayActivity.set("busy", active ? "waiting" : "executing");
-    if (active) animator.beginPrompt();
-    else animator.endPrompt();
+    if (active) {
+      cancelGreeting();
+      animator.beginPrompt();
+    } else animator.endPrompt();
   });
 
   pi.on("agent_end", async () => {

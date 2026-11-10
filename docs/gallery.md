@@ -2,6 +2,8 @@
 
 Every state of the Gentleman set, shown with the pink accent. Run `/emote <state>` or `/emote demo` to watch them animate in your terminal.
 
+The demo keeps the original scenes and includes all eight ODD work phases: `authorizing`, `exploring`, `researching`, `deciding`, `planning`, `implementing`, `checking` and `closing`. These are visual previews, not published work phases; agent activity stays unchanged.
+
 ![All gentle-emote states](gallery.png)
 
 ## Redesigned scenes
@@ -33,4 +35,4 @@ node scripts/sprites/preview.ts pink docs/gallery.png
 
 Back to the [README](../README.md).
 
-The greeting flies in with a propeller beanie, lands, removes the beanie, and waves with an uncovered head.
+The greeting flies in with a propeller beanie, lands, removes the beanie, and waves with an uncovered head. Its 500 ms startup delay is cancelled when a manual preview or session activity takes ownership, including blocking prompts that return to idle before the deadline.

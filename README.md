@@ -106,7 +106,7 @@ A source that is already configured keeps loading until it is updated or removed
 |---------|--------------|
 | `/emote` | Lists every state |
 | `/emote <state>` | Previews one state for a few seconds (tab-completes), e.g. `/emote delegate` |
-| `/emote demo` | Plays every state in sequence |
+| `/emote demo` | Plays the original scenes and all eight ODD work phases in sequence; previews do not publish a work phase or change agent activity |
 | `/emote status` | Read-only diagnostic: the last renderer-selected source PNG before any external idle-clock overlay (state, frame and set basename), the effective work phase and its source (native bus / direct tool / none), and the coarse activity snapshot (status, phase, active subagents). Works with every output off, changes nothing and never sends anything. ASCII-only rendering with no external destination does not select new PNGs; the reported PNG is the last captured selection, or none |
 | `/emote idle` | Stops a preview and goes back to rest |
 | `/emote internalOff` | Hides the terminal avatar and frees its prompt space; external PNG delivery continues |
@@ -119,6 +119,8 @@ A source that is already configured keeps loading until it is updated or removed
 | `/emote displayOff` | Pauses LED/ESP32 delivery without affecting the terminal, simulators or D200 |
 
 Any new prompt cancels a preview, so the avatar always follows the real agent.
+
+The startup greeting runs after 500 ms only if the avatar is still idle and no other event has claimed it. Manual previews (including `/emote idle`), agent activity, compaction, blocking prompts, farewells and tool errors cancel the pending greeting—even if the avatar returns to idle before the deadline.
 
 ## Config
 
