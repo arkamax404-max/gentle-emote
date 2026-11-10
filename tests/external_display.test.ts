@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ExternalDisplay, ExternalDisplays, normalizeExternalDisplay, isLoopbackDisplayUrl } from "../src/external_display.ts";
 import { encodePng, decodePng } from "../src/png.ts";
+import { drawDisplayText } from "../src/display_text.ts";
 import { ITermRenderer } from "../src/render_iterm.ts";
 import { KittyUnicodeRenderer } from "../src/render_kitty_unicode.ts";
 import { join } from "node:path";
@@ -266,7 +267,7 @@ test("activity-only updates resend unchanged sprites and snapshot the latest pen
   } finally { sender.dispose(); }
 });
 
-test("the detailed work phase header is additive, validated and deduplicated, and the PNG cache is keyed by it", async () => {
+test("work phase metadata stays additive, validated and deduplicated without overriding a selected state label", async () => {
   const calls: RequestInit[] = [];
   const sender = new ExternalDisplay(options, async (_url, init) => { calls.push(init!); return new Response(); });
   try {
@@ -300,16 +301,23 @@ test("the detailed work phase header is additive, validated and deduplicated, an
     sender.select(frame("detail.png")); await tick();
     assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "planning");
 
-    // The prepared PNG cache is keyed by the work phase detail.
+    // Both requests have the same selected idle state and busy (0) top row.
+    // Coarse/host metadata still changes HTTP headers, but not the selected label.
+    const selectedIdle = calls.at(-1)!.body;
     sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "implementing" });
     await tick();
-    assert.notDeepEqual(calls.at(-2)!.body, calls.at(-1)!.body, "a different detail renders a different PNG");
+    assert.deepEqual(calls.at(-1)!.body, selectedIdle, "coarse and work phase changes do not relabel the selected idle state");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "idle");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Phase"), "executing");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "implementing");
     const withImplementing = calls.at(-1)!.body;
     sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "planning" });
     await tick();
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "planning");
+    assert.deepEqual(calls.at(-1)!.body, selectedIdle, "a different detail keeps the selected label PNG");
     sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "implementing" });
     await tick();
-    assert.deepEqual(calls.at(-1)!.body, withImplementing, "the cache hits for a previously rendered detail");
+    assert.deepEqual(calls.at(-1)!.body, withImplementing, "revisiting metadata keeps the same selected label PNG");
   } finally { sender.dispose(); }
 });
 
@@ -374,6 +382,37 @@ test("failures never escape; timeout aborts; disposal aborts and drops pending",
   }
 });
 
+test("write displays WRITING while preserving the original sender metadata", async () => {
+  const calls: RequestInit[] = [];
+  const sender = new ExternalDisplay(options, async (_url, init) => { calls.push(init!); return new Response(); });
+  try {
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 2, workPhase: "planning" });
+    sender.select({ base64, state: "write", frame: "write.png", set: "gentleman" });
+    await tick();
+    assert.equal(calls.length, 1);
+    const request = calls[0]!;
+    const headers = new Headers(request.headers);
+    assert.equal(headers.get("Content-Type"), "image/png");
+    assert.equal(headers.get("X-Emote-Version"), "1");
+    assert.equal(headers.get("X-Emote-State"), "write");
+    assert.equal(headers.get("X-Emote-Frame"), "write.png");
+    assert.equal(headers.get("X-Emote-Set"), "gentleman");
+    assert.equal(headers.get("X-Emote-Status"), "busy");
+    assert.equal(headers.get("X-Emote-Phase"), "executing");
+    assert.equal(headers.get("X-Emote-Work-Phase"), "planning");
+    assert.equal(headers.get("X-Emote-Active-Subagents"), "2");
+    assert.equal(headers.get("X-Emote-Sequence"), "1");
+    assert.match(headers.get("X-Emote-Stream-Id")!, /^[0-9a-f-]{36}$/);
+
+    const image = decodePng(Buffer.from(request.body as Uint8Array));
+    assert.deepEqual([image.width, image.height], [64, 64]);
+    const expected = new Uint8Array(64 * 64 * 4);
+    for (let i = 3; i < expected.length; i += 4) expected[i] = 255;
+    drawDisplayText(expected, "WRITING", 54, [224, 224, 224]);
+    assert.deepEqual(image.data.slice(54 * 64 * 4, 59 * 64 * 4), expected.slice(54 * 64 * 4, 59 * 64 * 4));
+  } finally { sender.dispose(); }
+});
+
 test("the selected state recomposes the PNG label and the cache keys it without changing headers", async () => {
   const calls: RequestInit[] = [];
   const sender = new ExternalDisplay(options, async (_url, init) => { calls.push(init!); return new Response(); });
@@ -381,28 +420,30 @@ test("the selected state recomposes the PNG label and the cache keys it without 
     sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0 });
     sender.select({ base64, state: "explore", frame: "explore.png", set: "gentleman" });
     await tick();
-    const generic = calls.at(-1)!.body;
+    const ordinaryExplore = calls.at(-1)!.body;
     assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "explore");
     assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Phase"), "executing");
 
-    // The same base64 with a selected exploring state renders exploring in the PNG bytes.
-    sender.select({ base64, state: "exploring", frame: "explore.png", set: "gentleman" });
+    // Identical sprite bytes with two ordinary selected states need distinct labels.
+    sender.select({ base64, state: "build", frame: "explore.png", set: "gentleman" });
     await tick();
     assert.equal(calls.length, 2);
-    const detailed = calls.at(-1)!.body;
-    assert.notDeepEqual(generic, detailed, "the selected state changes the rendered label bytes");
-    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "exploring");
+    const ordinaryBuild = calls.at(-1)!.body;
+    assert.notDeepEqual(ordinaryExplore, ordinaryBuild, "ordinary selected states change the rendered label bytes");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "build");
     assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Phase"), "executing", "the coarse header stays");
 
-    // The prepared-PNG cache is keyed by the selected state: returning to the
-    // generic state recomposes the generic label, not the cached detail.
+    // The prepared-PNG cache must distinguish ordinary states even with identical sprites.
     sender.select({ base64, state: "explore", frame: "explore.png", set: "gentleman" });
     await tick();
     assert.equal(calls.length, 3);
-    assert.deepEqual(calls.at(-1)!.body, generic, "the generic state label recomposes identically");
-    sender.select({ base64, state: "exploring", frame: "explore.png", set: "gentleman" });
+    assert.deepEqual(calls.at(-1)!.body, ordinaryExplore, "the cached explore label recomposes identically");
+    sender.select({ base64, state: "build", frame: "explore.png", set: "gentleman" });
     await tick();
     assert.equal(calls.length, 4);
-    assert.deepEqual(calls.at(-1)!.body, detailed, "the cached detailed label recomposes identically");
+    assert.deepEqual(calls.at(-1)!.body, ordinaryBuild, "the cached build label recomposes identically");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "build");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Phase"), "executing");
+    assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), null);
   } finally { sender.dispose(); }
 });

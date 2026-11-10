@@ -173,6 +173,72 @@ test("session wiring mirrors image selections and prompt overlays, shutdown stop
   }
 });
 
+test("the 500ms startup greeting does not replace an active tool or its prompt restoration", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const root = mkdtempSync(join(tmpdir(), "emote-greeting-tool-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ externalDisplay: { enabled: true, url: "http://127.0.0.1:8000/emote" } }));
+  const originalFetch = globalThis.fetch;
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (_url, init) => { calls.push(init!); return new Response(); };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const state = (call: RequestInit) => new Headers(call.headers).get("X-Emote-State");
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root);
+    await flush();
+    await lab.emit("tool_execution_start", { toolName: "bash", toolCallId: "greeting-bash" });
+    await flush();
+    assert.ok(calls.length > 0);
+    assert.equal(state(calls.at(-1)!), "tool");
+
+    t.mock.timers.tick(500);
+    await flush();
+    assert.ok(!calls.some(call => state(call) === "hi"), "the delayed greeting must not interrupt active work");
+    assert.equal(state(calls.at(-1)!), "tool", "the tool remains visible at the greeting deadline");
+
+    await lab.emit("ui_prompt_start"); await flush();
+    assert.equal(state(calls.at(-1)!), "ask");
+    await lab.emit("ui_prompt_end"); await flush();
+    assert.equal(state(calls.at(-1)!), "tool", "ending the prompt restores the tool, not the skipped greeting");
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    t.mock.timers.reset();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an idle session still greets at the 500ms startup deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+  const root = mkdtempSync(join(tmpdir(), "emote-greeting-idle-"));
+  const dir = join(root, ".pi", "extensions", "gentle-emote");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "config.json"), JSON.stringify({ externalDisplay: { enabled: true, url: "http://127.0.0.1:8000/emote" } }));
+  const originalFetch = globalThis.fetch;
+  const calls: RequestInit[] = [];
+  globalThis.fetch = async (_url, init) => { calls.push(init!); return new Response(); };
+  const flush = () => new Promise<void>(resolve => setImmediate(resolve));
+  const state = (call: RequestInit) => new Headers(call.headers).get("X-Emote-State");
+  let lab: Awaited<ReturnType<typeof boot>> | undefined;
+  try {
+    lab = await boot(root);
+    await flush();
+    t.mock.timers.tick(499);
+    await flush();
+    assert.ok(!calls.some(call => state(call) === "hi"), "the greeting does not start before its deadline");
+
+    t.mock.timers.tick(1);
+    await flush();
+    assert.ok(calls.length > 0, "the idle greeting is delivered");
+    assert.equal(state(calls.at(-1)!), "hi", "idle startup still greets exactly at 500ms");
+  } finally {
+    await lab?.shutdown(); lab?.restore(); globalThis.fetch = originalFetch;
+    t.mock.timers.reset();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("ASCII-only terminal still POSTs animated PNGs, prompt overlays and model set changes", async (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   const root = mkdtempSync(join(tmpdir(), "emote-ascii-session-"));

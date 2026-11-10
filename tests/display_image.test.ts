@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { encodePng, decodePng } from "../src/png.ts";
 import { prepareDisplayImage } from "../src/display_image.ts";
 import { drawDisplayText } from "../src/display_text.ts";
+import { EMOTE_STATES } from "../src/types.ts";
 
 const pixel = (image: ReturnType<typeof decodePng>, x: number, y: number) => [...image.data.slice((y * image.width + x) * 4, (y * image.width + x) * 4 + 4)];
 const statusRow = (image: ReturnType<typeof decodePng>) => image.data.slice(44 * 64 * 4, 49 * 64 * 4);
@@ -51,8 +52,8 @@ test("status and phase fit below the untouched avatar for every activity", () =>
 test("agent count and parentheses are yellow while status retains its color", () => {
   const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) }).toString("base64");
   for (const [status, color] of [["idle", [128, 224, 160]], ["busy", [255, 208, 96]], ["error", [255, 96, 96]]] as const) {
-    // Both-idle with running subagents displays the requested SUBAGETNS label.
-    const displayed = status === "idle" ? "SUBAGETNS" : status;
+    // Both-idle with running subagents displays the corrected SUBAGENTS label.
+    const displayed = status === "idle" ? "SUBAGENTS" : status;
     const image = decodePng(prepareDisplayImage(base64, { status, phase: "idle", activeSubagents: 2 }));
     const left = Math.floor((64 - ((displayed.length + 4) * 4 - 1)) / 2);
     let yellow = 0;
@@ -81,15 +82,15 @@ test("agent count changes only the status row and large counts stay bounded", ()
   assert.deepEqual(render(1000), render(Number.MAX_SAFE_INTEGER));
 });
 
-test("both idle with running subagents shows SUBAGETNS and RUNNING with the count still yellow", () => {
+test("both idle with running subagents shows SUBAGENTS and RUNNING with the count still yellow", () => {
   const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) }).toString("base64");
   const render = (activeSubagents: number) => decodePng(prepareDisplayImage(base64, { status: "idle", phase: "idle", activeSubagents }));
-  const subagetns = (count: string) => referenceRow(44, `SUBAGETNS (${count})`, index => index > "SUBAGETNS".length ? [255, 255, 0] : [128, 224, 160]);
+  const subagents = (count: string) => referenceRow(44, `SUBAGENTS (${count})`, index => index > "SUBAGENTS".length ? [255, 255, 0] : [128, 224, 160]);
   const image = render(2);
 
-  // Exact requested spelling and colors, proven pixel-by-pixel against the shared renderer.
-  assert.deepEqual(statusRow(image), subagetns("2"), "status row spells the requested text with the idle status color");
-  assert.notDeepEqual(statusRow(image), referenceRow(44, "SUBAGENTS (2)", index => index > "SUBAGENTS".length ? [255, 255, 0] : [128, 224, 160]), "the requested spelling is intentional, not a typo to correct");
+  // Corrected spelling and colors, proven pixel-by-pixel against the shared renderer.
+  assert.deepEqual(statusRow(image), subagents("2"), "status row spells SUBAGENTS with the idle status color");
+  assert.notDeepEqual(statusRow(image), referenceRow(44, "SUBAGETNS (2)", index => index > "SUBAGETNS".length ? [255, 255, 0] : [128, 224, 160]), "status row no longer spells the old SUBAGETNS typo");
   assert.deepEqual(phaseRow(image), referenceRow(54, "RUNNING", [224, 224, 224]), "phase row shows RUNNING");
   let yellow = 0;
   for (let y = 44; y < 49; y++) for (let x = 0; x < 64; x++) {
@@ -98,12 +99,23 @@ test("both idle with running subagents shows SUBAGETNS and RUNNING with the coun
   }
   assert.ok(yellow > 0, "the count stays yellow after the longer status text");
 
+  // A selected frame and contradictory host detail never override RUNNING.
+  for (const state of EMOTE_STATES) {
+    for (const activeSubagents of [1, 2, 1000]) {
+      const selected = decodePng(prepareDisplayImage(base64, {
+        status: "idle", phase: "idle", activeSubagents, state, workPhase: "planning",
+      }));
+      assert.deepEqual(statusRow(selected), subagents(activeSubagents > 999 ? "999+" : String(activeSubagents)), state);
+      assert.deepEqual(phaseRow(selected), referenceRow(54, "RUNNING", [224, 224, 224]), state);
+    }
+  }
+
   // The >999 cap is retained inside the longer label.
-  assert.deepEqual(statusRow(render(1000)), subagetns("999+"));
+  assert.deepEqual(statusRow(render(1000)), subagents("999+"));
   assert.deepEqual(statusRow(render(Number.MAX_SAFE_INTEGER)), statusRow(render(1000)));
 });
 
-test("the SUBAGETNS override applies only when both status and phase are idle with a positive count", () => {
+test("the SUBAGENTS override applies only when both status and phase are idle with a positive count", () => {
   const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) }).toString("base64");
   const render = (activity: Record<string, unknown>) => decodePng(prepareDisplayImage(base64, activity as never));
   const idleCount = (count: string) => referenceRow(44, `idle (${count})`, index => index > 4 ? [255, 255, 0] : [128, 224, 160]);
@@ -249,9 +261,9 @@ test("the selected PNG state is the truthful detail label regardless of the coar
     assert.notDeepEqual(render({ ...executing, state: phase }), render(executing), phase);
   }
 
-  // Ordinary emote states are not host phases and keep the old behavior.
-  assert.deepEqual(render({ ...executing, state: "explore" }), render(executing));
-  assert.deepEqual(render({ ...executing, state: "explore", workPhase: "implementing" }), render({ ...executing, workPhase: "implementing" }));
+  // Ordinary demo states label themselves too, rather than a coarse or host phase.
+  const explore = decodePng(render({ ...executing, state: "explore", workPhase: "implementing" }));
+  assert.deepEqual(phaseRow(explore), referenceRow(54, "EXPLORING", [224, 224, 224]));
 
   // The selected state is the exact frame being shown, so it now labels the phase
   // row under every coarse phase, including the truthful emote-own ones.
@@ -283,13 +295,47 @@ test("the selected state labels the phase row under idle with no subagents, as /
   assert.deepEqual(phaseRow(image), referenceRow(54, "exploring", [224, 224, 224]));
 });
 
-test("every selected work-phase state labels itself under every coarse phase without a host phase", () => {
-  const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) }).toString("base64");
-  const render = (activity: Record<string, unknown>) => decodePng(prepareDisplayImage(base64, activity as never));
-  for (const state of ["authorizing", "exploring", "researching", "deciding", "planning", "implementing", "checking", "closing"] as const) {
-    for (const phase of ["idle", "thinking", "responding", "executing", "waiting", "compacting"] as const) {
-      const image = render({ status: "busy", phase, state });
-      assert.deepEqual(phaseRow(image), referenceRow(54, state, [224, 224, 224]), `${state} under ${phase}`);
+// Independent display copy oracle: state identifiers remain unchanged.
+const expectedStateLabels: Record<(typeof EMOTE_STATES)[number], string> = {
+  hi: "HI", idle: "IDLE", think: "THINKING", talk: "TALKING",
+  read: "READING", write: "WRITING", tool: "TOOL",
+  success: "SUCCESS", failure: "FAILURE", compact: "COMPACTING",
+  ask: "ASKING", grandma: "GRANDMA", bye: "BYE",
+  delegate: "DELEGATING", jobs: "JOBS", remember: "REMEMBERING",
+  yolo: "YOLO", "super-yolo": "SUPER-YOLO", explore: "EXPLORING",
+  build: "BUILDING", verify: "VERIFYING", judge: "JUDGING",
+  review: "REVIEWING", jira: "JIRA",
+  authorizing: "AUTHORIZING", exploring: "EXPLORING",
+  researching: "RESEARCHING", deciding: "DECIDING", planning: "PLANNING",
+  implementing: "IMPLEMENTING", checking: "CHECKING", closing: "CLOSING",
+};
+
+for (const state of EMOTE_STATES) {
+  test(`selected demo state ${state} names the phase under every coarse phase and contradictory host detail`, () => {
+    const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) }).toString("base64");
+    const plain = decodePng(prepareDisplayImage(base64, { status: "busy", phase: "executing" }));
+    for (const status of ["idle", "busy", "error"] as const) {
+      for (const phase of ["idle", "thinking", "responding", "executing", "waiting", "compacting"] as const) {
+        for (const workPhase of [undefined, state === "planning" ? "checking" : "planning"] as const) {
+          const activity = { status, phase, activeSubagents: 0, workPhase };
+          const image = decodePng(prepareDisplayImage(base64, { ...activity, state }));
+          const withoutState = decodePng(prepareDisplayImage(base64, activity));
+          assert.deepEqual(phaseRow(image), referenceRow(54, expectedStateLabels[state], [224, 224, 224]), `${status}/${phase}/${workPhase}`);
+          assert.deepEqual(statusRow(image), statusRow(withoutState), "selection never changes the status row");
+          assert.deepEqual(image.data.slice(0, 44 * 64 * 4), plain.data.slice(0, 44 * 64 * 4), "artwork stays unchanged");
+          assert.deepEqual(image.data.slice(59 * 64 * 4), plain.data.slice(59 * 64 * 4), "bottom padding stays unchanged");
+        }
+      }
     }
+  });
+}
+
+test("super-yolo retains its literal three-pixel hyphen in the phase row", () => {
+  const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) }).toString("base64");
+  const image = decodePng(prepareDisplayImage(base64, { status: "busy", phase: "executing", state: "super-yolo" }));
+  // Ten characters center at x=12; the sixth character starts at x=32.
+  // Explicit pixels avoid using the same possibly incomplete glyph table as the oracle.
+  for (let y = 54; y < 59; y++) for (let x = 32; x < 35; x++) {
+    assert.deepEqual(pixel(image, x, y), y === 56 ? [224, 224, 224, 255] : [0, 0, 0, 255]);
   }
 });

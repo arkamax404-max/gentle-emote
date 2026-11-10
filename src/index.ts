@@ -657,7 +657,7 @@ export default function (pi: ExtensionAPI) {
     if (greetTimer) clearTimeout(greetTimer);
     greetTimer = setTimeout(() => {
       greetTimer = null;
-      if (widgetActive) animator.transitionTo("hi");
+      if (widgetActive && animator.currentState === "idle") animator.transitionTo("hi");
     }, 500);
   });
 

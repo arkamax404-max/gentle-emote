@@ -48,12 +48,15 @@ test("resolveAccent reads Gentle Shell's banner color and skips broken files", (
 });
 
 test("bannerConfigCandidates follows Gentle Shell's precedence", () => {
-  const list = bannerConfigCandidates({ GENTLE_PI_CONFIG_HOME: "/cfg", PI_CODING_AGENT_DIR: "/lab/agent" }, "/home/u");
+  const configHome = join("/", "cfg");
+  const agentDir = join("/", "lab", "agent");
+  const home = join("/", "home", "u");
+  const list = bannerConfigCandidates({ GENTLE_PI_CONFIG_HOME: configHome, PI_CODING_AGENT_DIR: agentDir }, home);
   assert.deepEqual(list, [
-    "/cfg/banner.json",
-    "/lab/gentle-ai/banner.json",
-    "/lab/agent/gentle-ai/banner.json",
-    "/home/u/.gentle-shell/gentle-ai/banner.json",
-    "/home/u/.pi/gentle-ai/banner.json",
+    join(configHome, "banner.json"),
+    join("/", "lab", "gentle-ai", "banner.json"),
+    join(agentDir, "gentle-ai", "banner.json"),
+    join(home, ".gentle-shell", "gentle-ai", "banner.json"),
+    join(home, ".pi", "gentle-ai", "banner.json"),
   ]);
 });
