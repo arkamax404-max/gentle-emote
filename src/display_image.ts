@@ -51,7 +51,7 @@ export function prepareDisplayImage(base64: string, activity?: Pick<DisplayActiv
     // Both coarse labels idle while subagents run: show SUBAGENTS / RUNNING
     // on the display only, without changing the underlying activity.
     const running = activity.status === "idle" && activity.phase === "idle" && count > 0;
-    const statusLabel = running ? "SUBAGENTS" : activity.status;
+    const statusLabel = running ? "SUBAGENTS" : activity.status === "error" && activity.phase === "idle" ? "IDLE" : activity.status;
     const label = `${statusLabel} (${count > 999 ? "999+" : count})`;
     drawDisplayText(data, label, 44, index => index > statusLabel.length ? [255, 255, 0] : color);
     // Use the selected frame's registered demo name under any coarse/host phase.

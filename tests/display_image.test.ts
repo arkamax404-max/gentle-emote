@@ -49,11 +49,30 @@ test("status and phase fit below the untouched avatar for every activity", () =>
   );
 });
 
+test("idle errors display red IDLE while non-idle errors retain ERROR without changing activity or artwork", () => {
+  const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([200, 80, 40, 255]) }).toString("base64");
+  const plain = decodePng(prepareDisplayImage(base64));
+  for (const phase of ["idle", "thinking", "responding", "executing", "waiting", "compacting"] as const) {
+    for (const activeSubagents of [0, 2, 1000]) {
+      const activity = { status: "error", phase, activeSubagents } as const;
+      const snapshot = { ...activity };
+      const image = decodePng(prepareDisplayImage(base64, activity));
+      const label = phase === "idle" ? "IDLE" : "ERROR";
+      const count = activeSubagents > 999 ? "999+" : String(activeSubagents);
+      assert.deepEqual(statusRow(image), referenceRow(44, `${label} (${count})`, index => index > label.length ? [255, 255, 0] : [255, 96, 96]), `${phase}/${activeSubagents}`);
+      assert.deepEqual(phaseRow(image), referenceRow(54, phase, [224, 224, 224]), "the unselected phase row is unchanged");
+      assert.deepEqual(image.data.slice(0, 44 * 64 * 4), plain.data.slice(0, 44 * 64 * 4), "artwork and padding are unchanged");
+      assert.deepEqual(image.data.slice(59 * 64 * 4), plain.data.slice(59 * 64 * 4), "bottom padding is unchanged");
+      assert.deepEqual(activity, snapshot, "display copy never mutates activity");
+    }
+  }
+});
+
 test("agent count and parentheses are yellow while status retains its color", () => {
   const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([0, 0, 0, 255]) }).toString("base64");
   for (const [status, color] of [["idle", [128, 224, 160]], ["busy", [255, 208, 96]], ["error", [255, 96, 96]]] as const) {
-    // Both-idle with running subagents displays the corrected SUBAGENTS label.
-    const displayed = status === "idle" ? "SUBAGENTS" : status;
+    // Both-idle subagents show SUBAGENTS; an idle error shows IDLE in red.
+    const displayed = status === "idle" ? "SUBAGENTS" : status === "error" ? "IDLE" : status;
     const image = decodePng(prepareDisplayImage(base64, { status, phase: "idle", activeSubagents: 2 }));
     const left = Math.floor((64 - ((displayed.length + 4) * 4 - 1)) / 2);
     let yellow = 0;

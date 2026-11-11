@@ -382,6 +382,41 @@ test("failures never escape; timeout aborts; disposal aborts and drops pending",
   }
 });
 
+test("idle-error delivery displays red IDLE but preserves error headers and ordinary busy/non-idle error labels", async () => {
+  const calls: RequestInit[] = [];
+  const sender = new ExternalDisplay(options, async (_url, init) => { calls.push(init!); return new Response(); });
+  try {
+    sender.select(frame()); await tick();
+    const original = decodePng(Buffer.from(calls[0]!.body as Uint8Array));
+    for (const [status, phase, label, color] of [
+      ["error", "idle", "IDLE", [255, 96, 96]],
+      ["busy", "idle", "BUSY", [255, 208, 96]],
+      ["error", "executing", "ERROR", [255, 96, 96]],
+    ] as const) {
+      const activity = { status, phase, activeSubagents: 2 };
+      const snapshot = { ...activity };
+      const before = calls.length;
+      sender.updateActivity(activity); await tick();
+      assert.equal(calls.length, before + 1, "each distinct activity delivers one PNG");
+      const request = calls.at(-1)!;
+      const headers = new Headers(request.headers);
+      assert.equal(headers.get("Content-Type"), "image/png");
+      assert.equal(headers.get("X-Emote-Status"), status);
+      assert.equal(headers.get("X-Emote-Phase"), phase);
+      assert.equal(headers.get("X-Emote-Active-Subagents"), "2");
+      assert.equal(headers.get("X-Emote-State"), "idle");
+      const image = decodePng(Buffer.from(request.body as Uint8Array));
+      const expected = new Uint8Array(64 * 64 * 4);
+      for (let i = 3; i < expected.length; i += 4) expected[i] = 255;
+      drawDisplayText(expected, `${label} (2)`, 44, index => index > label.length ? [255, 255, 0] : color);
+      assert.deepEqual(image.data.slice(44 * 64 * 4, 49 * 64 * 4), expected.slice(44 * 64 * 4, 49 * 64 * 4));
+      assert.deepEqual(image.data.slice(0, 44 * 64 * 4), original.data.slice(0, 44 * 64 * 4), "sprite stays unchanged");
+      assert.deepEqual(image.data.slice(49 * 64 * 4), original.data.slice(49 * 64 * 4), "selected idle phase row stays unchanged");
+      assert.deepEqual(activity, snapshot, "sender does not mutate caller activity");
+    }
+  } finally { sender.dispose(); }
+});
+
 test("write displays WRITING while preserving the original sender metadata", async () => {
   const calls: RequestInit[] = [];
   const sender = new ExternalDisplay(options, async (_url, init) => { calls.push(init!); return new Response(); });
