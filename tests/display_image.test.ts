@@ -14,6 +14,43 @@ const referenceRow = (top: 44 | 54, text: string, color: readonly number[] | ((i
   drawDisplayText(data, text, top, color);
   return data.slice(top * 64 * 4, (top + 5) * 64 * 4);
 };
+test("transparent avatar preserves source RGBA and leaves padding and label gaps transparent", () => {
+  const source = new Uint8Array([
+    80, 40, 20, 0, 200, 100, 50, 128, 20, 60, 100, 255, 0, 0, 0, 255,
+  ]);
+  const base64 = encodePng({ width: 4, height: 1, data: source }).toString("base64");
+  const activity = { status: "busy", phase: "thinking", activeSubagents: 2 } as const;
+  const expected = new Uint8Array(64 * 64 * 4);
+  expected.set(source, (19 * 64 + 30) * 4);
+  drawDisplayText(expected, "BUSY (2)", 44, index => index > 4 ? [255, 255, 0] : [255, 208, 96]);
+  drawDisplayText(expected, "THINKING", 54, [224, 224, 224]);
+  for (const [background, coverage] of [["#404040", 0], ["#abcdef", 0.75], ["#000000", 1]] as const) {
+    const image = decodePng(prepareDisplayImage(base64, activity, background, coverage, undefined, true));
+    assert.deepEqual([image.width, image.height], [64, 64]);
+    assert.deepEqual(image.data, expected, "only source RGBA and opaque label ink occupy the transparent canvas");
+  }
+  assert.deepEqual(
+    prepareDisplayImage(base64, activity, "#404040", 0.75, undefined, false),
+    prepareDisplayImage(base64, activity, "#404040", 0.75),
+    "explicit false retains the opaque default",
+  );
+  assert.throws(() => prepareDisplayImage(base64, activity, "gray", 1, undefined, true), /invalid display background/);
+  assert.throws(() => prepareDisplayImage(base64, activity, "#404040", -1, undefined, true), /invalid background coverage/);
+});
+
+test("transparent avatar keeps outline ink opaque without chromakeying opaque black", () => {
+  const data = new Uint8Array(3 * 3 * 4);
+  data.set([0, 0, 0, 255], (1 * 3 + 1) * 4);
+  const base64 = encodePng({ width: 3, height: 3, data }).toString("base64");
+  const image = decodePng(prepareDisplayImage(base64, undefined, "#404040", 0.75, "#ffffff", true));
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+    const expected = x === 31 && y === 19 ? [0, 0, 0, 255]
+      : x >= 30 && x <= 32 && y >= 18 && y <= 20 ? [255, 255, 255, 255] : [0, 0, 0, 0];
+    assert.deepEqual(pixel(image, x, y), expected);
+  }
+  assert.throws(() => prepareDisplayImage(base64, undefined, "#000000", 1, "white", true), /invalid display outline/);
+});
+
 test("64x64 opaque canvas centers in a 48x40 top viewport and composites alpha", () => {
   const png = encodePng({ width: 2, height: 1, data: new Uint8Array([200, 100, 50, 128, 255, 0, 0, 0]) });
   const image = decodePng(prepareDisplayImage(png.toString("base64")));

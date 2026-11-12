@@ -21,7 +21,8 @@ const IDENTIFIER = /^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}$/;
 /** Invalid options disable networking, never local rendering. Credentials are not supported. */
 export function normalizeExternalDisplay(value: unknown): ExternalDisplayConfig | null {
   if (!value || typeof value !== "object") return null;
-  const { enabled, url, timeoutMs = 1000, background, backgroundCoverage, outline } = value as ExternalDisplayConfig;
+  const { enabled, url, timeoutMs = 1000, transparentBackground, background, backgroundCoverage, outline } = value as ExternalDisplayConfig;
+  if (transparentBackground !== undefined && typeof transparentBackground !== "boolean") return null;
   if (outline !== undefined && (typeof outline !== "string" || !/^#[0-9a-f]{6}$/i.test(outline))) return null;
   if (backgroundCoverage !== undefined && (typeof backgroundCoverage !== "number" || !Number.isFinite(backgroundCoverage) || backgroundCoverage < 0 || backgroundCoverage > 1)) return null;
   if (background !== undefined && (typeof background !== "string" || !/^#[0-9a-f]{6}$/i.test(background))) return null;
@@ -29,7 +30,7 @@ export function normalizeExternalDisplay(value: unknown): ExternalDisplayConfig 
   try {
     const parsed = new URL(url);
     if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.hash) return null;
-    return { enabled: true, url: parsed.href, timeoutMs, ...(background === undefined ? {} : { background }), ...(backgroundCoverage === undefined ? {} : { backgroundCoverage }), ...(outline === undefined ? {} : { outline }) };
+    return { enabled: true, url: parsed.href, timeoutMs, ...(transparentBackground === undefined ? {} : { transparentBackground }), ...(background === undefined ? {} : { background }), ...(backgroundCoverage === undefined ? {} : { backgroundCoverage }), ...(outline === undefined ? {} : { outline }) };
   } catch { return null; }
 }
 
@@ -58,7 +59,7 @@ export class ExternalDisplays {
       return;
     }
     this.displays = config.targets.map((target, index) => new ExternalDisplay(
-      target && typeof target === "object" ? { timeoutMs: config.timeoutMs, background: config.background, backgroundCoverage: config.backgroundCoverage, outline: config.outline, ...target } : null,
+      target && typeof target === "object" ? { timeoutMs: config.timeoutMs, transparentBackground: config.transparentBackground, background: config.background, backgroundCoverage: config.backgroundCoverage, outline: config.outline, ...target } : null,
       fetcher,
       message => report(`destination ${index + 1}: ${message}`),
     ));
@@ -212,8 +213,8 @@ export class ExternalDisplay {
       let body = this.cache.get(cacheKey);
       if (!body) {
         body = image.clockAt === undefined
-          ? prepareDisplayImage(image.base64, { ...image.activity, state: image.state }, this.options.background, this.options.backgroundCoverage, this.options.outline)
-          : prepareIdleClockImage(image.clockAt);
+          ? prepareDisplayImage(image.base64, { ...image.activity, state: image.state }, this.options.background, this.options.backgroundCoverage, this.options.outline, this.options.transparentBackground)
+          : prepareIdleClockImage(image.clockAt, this.options.transparentBackground);
         if (this.cache.size >= 32) this.cache.delete(this.cache.keys().next().value!);
         this.cache.set(cacheKey, body);
       }

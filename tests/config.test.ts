@@ -38,3 +38,29 @@ test("external display defaults off, layered fields merge, existing size and ter
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("transparentBackground merges across config layers and preserves an explicit false", () => {
+  const root = mkdtempSync(join(tmpdir(), "emote-transparent-config-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  const ext = join(root, "extension"), agent = join(root, "agent"), project = join(root, "project");
+  const user = join(agent, "extensions", "gentle-emote");
+  const local = join(project, ".pi", "extensions", "gentle-emote");
+  for (const dir of [ext, user, local]) mkdirSync(dir, { recursive: true });
+  process.env.PI_CODING_AGENT_DIR = agent;
+  try {
+    const target = { enabled: true, url: "http://localhost/emote" };
+    writeFileSync(join(ext, "config.json"), JSON.stringify({ externalDisplay: target }));
+    writeFileSync(join(user, "config.json"), JSON.stringify({ externalDisplay: { transparentBackground: true } }));
+    writeFileSync(join(local, "config.json"), JSON.stringify({ externalDisplay: { background: "#404040" } }));
+    assert.deepEqual(normalizeExternalDisplay(loadLayeredConfig(ext, project).config.externalDisplay), {
+      ...target, timeoutMs: 1000, background: "#404040", transparentBackground: true,
+    });
+    writeFileSync(join(local, "config.json"), JSON.stringify({ externalDisplay: { transparentBackground: false } }));
+    assert.deepEqual(normalizeExternalDisplay(loadLayeredConfig(ext, project).config.externalDisplay), {
+      ...target, timeoutMs: 1000, transparentBackground: false,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
