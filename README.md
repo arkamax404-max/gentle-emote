@@ -24,7 +24,7 @@ Gentle Emote ships as separate repositories. Each one works on its own, and each
 | [gentle-emote-desktop](https://github.com/arkamax404-max/gentle-emote-desktop) | Native Windows desktop utility: shows the avatar in its own frameless window, opaque or fully transparent, so it can sit anywhere on the desktop instead of the terminal. |
 | [emote-display-firmware](https://github.com/arkamax404-max/emote-display-firmware) | ESP32 LED-matrix receiver that drives a physical display from the frames this extension delivers. |
 | [emote-display-simulator](https://github.com/arkamax404-max/emote-display-simulator) | Browser receiver on `127.0.0.1:8000`, the quickest way to see deliveries while configuring a destination. |
-| `gentle-emote-d200` | Ulanzi D200 key client on `127.0.0.1:8003`, the destination added by `/emote d200On`. It lives next to this checkout and is not published yet. |
+| [gentle-emote-d200](https://github.com/arkamax404-max/gentle-emote-d200) | Ulanzi D200 key plugin on `127.0.0.1:8003`: the destination added by `/emote d200On`, which mirrors the avatar frames to the key. |
 
 He listens to local session events: no model calls or context. Networking is off by default; optional external-display mirroring sends only avatar images and visual metadata.
 
