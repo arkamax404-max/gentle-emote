@@ -23,7 +23,7 @@ OWNER-only administrative housekeeping may use the exact standalone line `Admini
 
 GitHub does not allow an author to approve their own pull request, so a pull request authored by the sole maintainer cannot satisfy an approving-review requirement with that account. Such a pull request may be merged without a second review only when all of the following hold:
 
-- the linked issue is open, classified in this fork, and carries the `approved` label;
+- the linked issue is open, classified in this fork, and carries the `approved` label, or the pull request is administrative housekeeping covered by the OWNER-only marker above and links no issue at all;
 - the linked-issue check passes on the pull request;
 - every required automated check passes;
 - any review the change's workflow requires has completed, and its outcome is recorded;
