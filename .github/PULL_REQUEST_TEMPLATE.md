@@ -2,11 +2,11 @@
 
 ## Related issue
 
-```text
-Closes #
-```
+Write the closing reference on its own line and never inside a code block: GitHub ignores closing keywords that appear inside fenced blocks, so a fenced reference does not close the issue when the pull request merges.
 
-Use an open, classified issue in `arkamax404-max/gentle-emote` that already has the `approved` label. `Closes #123` is the reference the check reads. A placeholder is not a reference.
+Closes #
+
+Use an open, classified issue in `arkamax404-max/gentle-emote` that already has the `approved` label. `Closes #123` is the reference the check reads and the reference GitHub uses to close the issue. A placeholder is not a reference.
 
 OWNER-only administrative housekeeping (not runtime features) may instead use this line alone:
 
