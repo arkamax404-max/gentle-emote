@@ -14,7 +14,17 @@ OWNER-only administrative housekeeping (not runtime features) may instead use th
 Administrative-exception: owner-maintenance
 ```
 
-This does not waive an approving review or validation of any issue references included in the body.
+This does not waive the owner-merge record described below or validation of any issue references included in the body.
+
+## Owner merge
+
+A pull request authored by the sole maintainer cannot receive an approving review from that same account. Record the review that preceded the merge with one standalone line:
+
+```text
+Owner-merge: self-reviewed, independent review <reference>
+```
+
+The record does not replace the linked-issue check, automated checks, or any review the change's workflow requires.
 
 ## Type
 
