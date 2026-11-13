@@ -9,9 +9,24 @@
 
 </div>
 
+> **This is a fork.** [`arkamax404-max/gentle-emotex`](https://github.com/arkamax404-max/gentle-emotex) is a personal fork of [`efolchmontiel/gentle-emote`](https://github.com/efolchmontiel/gentle-emote), which in turn forked [`cgxeiji/pi-emote`](https://github.com/cgxeiji/pi-emote). Upstream authorship stays with its authors: see [Credits and acknowledgements](#credits-and-acknowledgements). Issues and pull requests for this fork follow [CONTRIBUTING.md](CONTRIBUTING.md).
+
 A pixel-art **Gentleman** that sits in a frame to the left of your prompt and acts out what the agent is doing. Works in [Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell) and [Pi](https://pi.dev).
 
-He listens to local session events: no model calls or context. Networking is off by default; optional external-display mirroring sends only avatar images and visual metadata. This fork builds on [efolchmontiel/gentle-emote](https://github.com/efolchmontiel/gentle-emote), originally forked from [cgxeiji/pi-emote](https://github.com/cgxeiji/pi-emote). It adds independent simulator/ESP32 delivery, activity labels, silhouette outlines, ASCII-terminal mirroring, and the editable `gentleled` image set.
+He listens to local session events: no model calls or context. Networking is off by default; optional external-display mirroring sends only avatar images and visual metadata. On top of upstream, this fork adds independent simulator/ESP32 delivery, activity labels, silhouette outlines, ASCII-terminal mirroring, the editable `gentleled` image set, per-destination transparent output and the related projects below.
+
+## Related projects
+
+Gentle Emote ships as separate repositories. Each one works on its own, and each consumes the same PNG frames and protocol described here.
+
+| Project | What it does |
+| --- | --- |
+| [gentle-emote-desktop](https://github.com/arkamax404-max/gentle-emote-desktop) | Native Windows desktop utility: shows the avatar in its own frameless window, opaque or fully transparent, so it can sit anywhere on the desktop instead of the terminal. |
+| [emote-display-firmware](https://github.com/arkamax404-max/emote-display-firmware) | ESP32 LED-matrix receiver that drives a physical display from the frames this extension delivers. |
+| [emote-display-simulator](https://github.com/arkamax404-max/emote-display-simulator) | Browser receiver on `127.0.0.1:8000`, the quickest way to see deliveries while configuring a destination. |
+| `gentle-emote-d200` | Ulanzi D200 key client on `127.0.0.1:8003`, the destination added by `/emote d200On`. It lives next to this checkout and is not published yet. |
+
+He listens to local session events: no model calls or context. Networking is off by default; optional external-display mirroring sends only avatar images and visual metadata.
 
 ## Scenes
 
@@ -95,7 +110,7 @@ Restart the session (or `/reload`), then run `/emote internalOn` to show the Gen
 
 ```bash
 pi install npm:gentle-emote        # published package
-pi install ./gentle-emotex          # local checkout with the changes (loaded from that path)
+pi install ./gentle-emote          # local checkout with the changes (loaded from that path)
 ```
 
 A source that is already configured keeps loading until it is updated or removed (`pi remove <source>`); installing an additional source does not replace it automatically.
@@ -405,11 +420,18 @@ Valid `render` values: `"auto"`, `"kitty-unicode"`, `"kitty"`, `"iterm2"`, `"asc
 
 ## Contributing
 
-Open an issue first and wait for the `approved` label. A pull request has to point at that issue with `Closes #N` and needs an approving review. Only the maintainer merges. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Open an issue first and wait for the `approved` label. A pull request has to point at that issue with `Closes #N` and needs an approving review from someone other than its author; a pull request authored by the sole maintainer instead records the review that preceded the merge. Only the maintainer merges. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Credits
+## Credits and acknowledgements
 
-Built on [pi-emote](https://github.com/cgxeiji/pi-emote) by Eiji Onchi ([@cgxeiji](https://github.com/cgxeiji)): the animator, renderers and terminal detection come from there. The Gentleman avatar, the framed layout beside the prompt and the Gentle Shell scenes were added in this fork.
+- **[pi-emote](https://github.com/cgxeiji/pi-emote)** by Eiji Onchi ([@cgxeiji](https://github.com/cgxeiji)): the animator, renderers and terminal detection come from there. This project would not exist without that work.
+- **[efolchmontiel/gentle-emote](https://github.com/efolchmontiel/gentle-emote)**: the immediate upstream fork base, and the source of the structure this repository inherited.
+- **[Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell)**: the host that publishes the activity status, detailed ODD work phases and subagent lifecycle events this extension consumes.
+- **[Pi](https://pi.dev)**: the agent host the extension also runs in, through its extension and event API.
+
+The Gentleman avatar, the framed layout beside the prompt and the Gentle Shell scenes were added in this fork, and so were external display delivery, activity labels, silhouette outlines, ASCII mirroring and per-destination transparent output.
+
+Thanks to the maintainers of the upstream projects for keeping their work documented and MIT-licensed, and to everyone who reports a broken frame, a wrong label or a receiver that drops deliveries.
 
 ## License
 
