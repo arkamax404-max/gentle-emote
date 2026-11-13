@@ -4,6 +4,7 @@ import { ExternalDisplay, ExternalDisplays, type DisplayActivity } from "../src/
 import { createD200Display } from "../src/d200_display.ts";
 import { encodePng, decodePng } from "../src/png.ts";
 import { prepareDisplayImage } from "../src/display_image.ts";
+import { prepareIdleClockImage } from "../src/idle_clock_image.ts";
 
 const options = { enabled: true, url: "http://127.0.0.1:48000/emote", timeoutMs: 30000 };
 const idle: DisplayActivity = { status: "idle", phase: "idle", activeSubagents: 0 };
@@ -38,6 +39,49 @@ function assertText(data: Uint8Array, value: string, left: number, top: number, 
     }
   }
 }
+
+test("transparent clock clears the whole background while retaining every opaque ink pixel", () => {
+  for (const now of [new Date(2026, 10, 9, 23, 59, 58).getTime(), new Date(2026, 10, 10, 0, 0, 0).getTime()]) {
+    const opaque = decodePng(prepareIdleClockImage(now));
+    const transparent = decodePng(prepareIdleClockImage(now, true));
+    assert.deepEqual([transparent.width, transparent.height], [64, 64]);
+    assert.deepEqual(prepareIdleClockImage(now, false), prepareIdleClockImage(now));
+    let ink = 0, gaps = 0;
+    for (let offset = 0; offset < opaque.data.length; offset += 4) {
+      const rgba = [...opaque.data.slice(offset, offset + 4)];
+      if (rgba.slice(0, 3).some(channel => channel !== 0)) {
+        assert.deepEqual([...transparent.data.slice(offset, offset + 4)], rgba);
+        ink++;
+      } else {
+        assert.deepEqual([...transparent.data.slice(offset, offset + 4)], [0, 0, 0, 0]);
+        gaps++;
+      }
+    }
+    assert.ok(ink > 0 && gaps > 0, "digits, walkers and path remain ink; all gaps become transparent");
+  }
+});
+
+test("clock HTTP delivery inherits transparency per target and retains the opaque override", async t => {
+  const clock = virtualTime(t), calls: Array<{ url: string; init: RequestInit }> = [];
+  const sender = new ExternalDisplays({ ...options, transparentBackground: true, background: "#abcdef", backgroundCoverage: 0, targets: [
+    { ...options }, { ...options, url: "http://matrix.invalid/emote", transparentBackground: false },
+  ] }, async (url, init) => { calls.push({ url: String(url), init: init! }); return new Response(); });
+  try {
+    sender.select(frame()); await flush(); await clock.advance(301000);
+    const clocks = calls.filter(call => headers(call.init).get("X-Emote-State") === "clock");
+    assert.equal(clocks.length, 2);
+    for (const { url, init } of clocks) {
+      const transparent = url === options.url;
+      assert.deepEqual(Buffer.from(init.body as Uint8Array), prepareIdleClockImage(Math.floor(Date.now() / 1000) * 1000, transparent));
+      assert.deepEqual([...pixels(init).data.slice(0, 4)], [0, 0, 0, transparent ? 0 : 255]);
+      assert.equal(init.method, "POST");
+      assert.equal(headers(init).get("Content-Type"), "image/png");
+      assert.equal(headers(init).get("X-Emote-Version"), "1");
+      assert.equal(headers(init).get("X-Emote-Frame"), "clock.png");
+      assert.equal(headers(init).get("X-Emote-Sequence"), "2");
+    }
+  } finally { sender.dispose(); }
+});
 
 test("S1: ordinary PNG protocol remains unchanged through exactly five idle minutes, then resumes the remembered avatar", async t => {
   const clock = virtualTime(t), calls: RequestInit[] = [];

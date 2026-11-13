@@ -14,8 +14,8 @@ const actionLabels = new Map<string, string>([
   ["judge", "judging"], ["review", "reviewing"],
 ]);
 
-/** Raw post-accent sprite, not the terminal border; composite onto an opaque LED canvas. */
-export function prepareDisplayImage(base64: string, activity?: Pick<DisplayActivity, "status" | "phase"> & Partial<Pick<DisplayActivity, "activeSubagents" | "workPhase"> & { state?: string }>, background = "#000000", backgroundCoverage = 1, outline?: string): Buffer {
+/** Raw post-accent sprite, not the terminal border; opaque by default, optionally preserving RGBA. */
+export function prepareDisplayImage(base64: string, activity?: Pick<DisplayActivity, "status" | "phase"> & Partial<Pick<DisplayActivity, "activeSubagents" | "workPhase"> & { state?: string }>, background = "#000000", backgroundCoverage = 1, outline?: string, transparentBackground = false): Buffer {
   if (outline !== undefined && !/^#[0-9a-f]{6}$/i.test(outline)) throw new Error("invalid display outline");
   if (!Number.isFinite(backgroundCoverage) || backgroundCoverage < 0 || backgroundCoverage > 1) throw new Error("invalid background coverage");
   if (!/^#[0-9a-f]{6}$/i.test(background)) throw new Error("invalid display background");
@@ -29,17 +29,22 @@ export function prepareDisplayImage(base64: string, activity?: Pick<DisplayActiv
   const left = Math.floor((64 - width) / 2), top = Math.floor((40 - height) / 2);
   const data = new Uint8Array(64 * 64 * 4);
   const occupied = outline ? new Uint8Array(64 * 41) : null;
-  // Native sprites are opaque with black backdrops. Custom alpha sprites retain
-  // opaque black artwork in their mask; opaque sprites use black as the matte.
+  // Alpha sprites retain opaque black artwork in their mask;
+  // fully opaque sprites use black as the matte for the outline only.
   const hasTransparency = !!outline && source.data.some((value, index) => index % 4 === 3 && value < 255);
-  for (let i = 3; i < data.length; i += 4) data[i] = 255;
-  // Apply the configured background only inside the source PNG's drawn bounds.
-  // Outer padding and the label area remain black.
+  if (!transparentBackground) for (let i = 3; i < data.length; i += 4) data[i] = 255;
+  // In opaque mode, apply the background only inside the source PNG's bounds.
+  // Outer padding and label gaps stay black, or transparent in RGBA mode.
   for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
     const src = (Math.floor(y * source.height / height) * source.width + Math.floor(x * source.width / width)) * 4;
     const dst = ((top + y) * 64 + left + x) * 4;
     const alpha = source.data[src + 3]! / 255;
     if (occupied && alpha > 0 && (hasTransparency || source.data[src] || source.data[src + 1] || source.data[src + 2])) occupied[dst / 4] = 1;
+    if (transparentBackground) {
+      // Straight RGBA: preserve even RGB under zero alpha, without premultiplication.
+      data.set(source.data.subarray(src, src + 4), dst);
+      continue;
+    }
     // A fixed, canvas-anchored pattern: no frame-to-frame brightness switching.
     const covered = bayer[((top + y) % 4) * 4 + (left + x) % 4]! < Math.round(backgroundCoverage * 16);
     for (let c = 0; c < 3; c++) data[dst + c] = Math.round(source.data[src + c]! * alpha + (covered ? rgb[c]! : 0) * (1 - alpha));

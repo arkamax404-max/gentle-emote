@@ -12,11 +12,11 @@ const INK = { white: [242, 241, 220], muted: [147, 181, 160], blue: [85, 189, 23
   green: [184, 243, 91], skin: [244, 195, 140], amber: [241, 189, 101], path: [41, 75, 54] };
 
 /** Selected bottom-promenade design: native pixels, local DD/MM/YYYY and 24h time. */
-export function prepareIdleClockImage(nowMs: number): Buffer {
+export function prepareIdleClockImage(nowMs: number, transparentBackground = false): Buffer {
   const now = new Date(nowMs);
   if (!Number.isFinite(now.getTime())) throw new Error("invalid idle clock time");
   const data = new Uint8Array(64 * 64 * 4);
-  for (let i = 3; i < data.length; i += 4) data[i] = 255;
+  if (!transparentBackground) for (let i = 3; i < data.length; i += 4) data[i] = 255;
   const rect = (left: number, top: number, width: number, height: number, ink: number[]) => {
     for (let y = Math.max(0, top); y < Math.min(64, top + height); y++) {
       for (let x = Math.max(0, left); x < Math.min(64, left + width); x++) {

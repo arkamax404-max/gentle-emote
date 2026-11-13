@@ -96,6 +96,56 @@ test("multi-destination configuration preserves legacy and safely disables inval
   assert.deepEqual(calls, [options.url]);
 });
 
+test("transparentBackground accepts only booleans and still validates unused background settings", async () => {
+  assert.deepEqual(normalizeExternalDisplay(options), options, "absence retains the legacy normalized shape");
+  for (const transparentBackground of [true, false]) {
+    assert.deepEqual(normalizeExternalDisplay({ ...options, transparentBackground }), { ...options, transparentBackground });
+  }
+  const invalid: unknown[] = [null, 0, 1, "true", "false", [], {}].map(transparentBackground => ({ ...options, transparentBackground }));
+  for (const background of [null, 123, "gray", "#fff", "#000000\r\n"]) {
+    invalid.push({ ...options, transparentBackground: true, background });
+  }
+  for (const backgroundCoverage of [NaN, Infinity, -1, 1.1, "0.75", null]) {
+    invalid.push({ ...options, transparentBackground: true, backgroundCoverage });
+  }
+  let calls = 0;
+  for (const input of invalid) {
+    assert.equal(normalizeExternalDisplay(input), null);
+    const sender = new ExternalDisplay(input, async () => { calls++; return new Response(); });
+    try { assert.equal(sender.enabled, false); sender.select(frame()); await tick(); }
+    finally { sender.dispose(); }
+  }
+  assert.equal(calls, 0, "invalid configuration cannot deliver or consume a sequence");
+});
+
+test("avatar HTTP delivery inherits transparency per target and honors an explicit opaque override", async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const opaqueUrl = "http://matrix.invalid/emote";
+  const sender = new ExternalDisplays({ ...options, transparentBackground: true, background: "#404040", targets: [
+    { ...options }, { ...options, url: opaqueUrl, transparentBackground: false },
+  ] }, async (url, init) => { calls.push({ url: String(url), init: init! }); return new Response(); });
+  try {
+    const source = new Uint8Array([200, 100, 50, 128]);
+    sender.select({ ...frame(), base64: encodePng({ width: 1, height: 1, data: source }).toString("base64") });
+    await tick();
+    assert.equal(calls.length, 2);
+    for (const { url, init } of calls) {
+      const transparent = url === options.url;
+      const image = decodePng(Buffer.from(init.body as Uint8Array));
+      assert.deepEqual([image.width, image.height], [64, 64]);
+      assert.deepEqual([...image.data.slice(0, 4)], [0, 0, 0, transparent ? 0 : 255]);
+      const center = (19 * 64 + 31) * 4;
+      assert.deepEqual([...image.data.slice(center, center + 4)], transparent ? [...source] : [132, 82, 57, 255]);
+      const headers = new Headers(init.headers);
+      assert.equal(init.method, "POST");
+      assert.equal(headers.get("Content-Type"), "image/png");
+      assert.equal(headers.get("X-Emote-Version"), "1");
+      assert.equal(headers.get("X-Emote-State"), "idle");
+      assert.equal(headers.get("X-Emote-Sequence"), "1");
+    }
+  } finally { sender.dispose(); }
+});
+
 test("background inherits per target, overrides independently, and rejects invalid colors", async () => {
   for (const background of [null, 123, "gray", "#fff", "#000000\r\n"]) {
     assert.equal(normalizeExternalDisplay({ ...options, background }), null);

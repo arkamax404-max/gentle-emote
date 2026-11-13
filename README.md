@@ -196,19 +196,40 @@ To send to both the local simulator and a MatrixPortal receiver, replace the sin
 
 `targets`, when present, replaces the legacy `url` and is replaced as a whole by higher-priority config layers. Up to 8 destinations are allowed, each with its own queue, cache, timeout, stream ID and sequence. Target `timeoutMs` overrides the parent timeout. Turn off the simulator target with `enabled: false` when it is only needed for debugging. Use the board's LAN IP if mDNS does not resolve. The parent `enabled` switches all delivery off.
 
+### Transparent PNGs per destination
+
+Set `transparentBackground: true` for a receiver that supports alpha. This preserves the source sprite's RGBA (including partial alpha and opaque black) and makes the **entire canvas** transparent outside the artwork, text and outline ink. Padding and gaps between labels are transparent; text and outline ink remain opaque. The idle clock uses transparent gaps too, with its digits, walkers and path unchanged. No color is removed by chromakey.
+
+```json
+{
+  "externalDisplay": {
+    "enabled": true,
+    "transparentBackground": true,
+    "targets": [
+      { "enabled": true, "url": "http://127.0.0.1:8000/emote" },
+      { "enabled": true, "url": "http://gentle-matrix.local/emote", "transparentBackground": false }
+    ]
+  }
+}
+```
+
+The boolean defaults to `false`: existing simulator/hardware output stays opaque unless opted in. Targets inherit the parent value; an explicit `false` keeps a target opaque. Normal configuration layering applies. Other values (including `null` and strings) disable the affected destination. In transparent mode, `background` and `backgroundCoverage` have **no rendering effect**, but supplied values must still be valid. The PNG remains 64×64 and protocol v1 is unchanged; how alpha is displayed depends on the receiver. The dedicated `/emote d200On` mirror remains opaque and does not inherit this setting.
+
+### Opaque background and delivery
+
 Optional `background` accepts an RGB hex color (`"#000000"` by default). It composites genuinely transparent pixels only within the drawn sprite PNG bounds; outer canvas padding and the text area stay black. **opaque black pixels in sprites remain black**. Set `"background": "#404040"` on the parent to try a dim gray on both destinations, or on one target to override it independently. Invalid color values disable that destination. Very dark grays may quantize to black on low-bit-depth panels. Optional `backgroundCoverage` (0–1, default 1) applies a fixed 4×4 ordered dither to the transparency background only; `0.75` retains 75% gray pixels and uses black for the rest. Coverage has 1/16 increments and is inherited/overridden per target. This reduces apparent background brightness without temporal flicker or changing opaque artwork.
 
 Run `/reload`, open the simulator in your browser, then `/emote debugOn` and `/emote demo`. For the LED/ESP32, use `/emote displayOn`. Stop each group with its corresponding Off command; the choice persists. Shutdown/reload aborts pending delivery, then the next session restores saved preferences.
 
 - **Trust:** project config can override destinations through the normal layered merge; saved `debugOn` or `displayOn` preferences allow delivery to those enabled destinations. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
 - **Options:** disabled by default; URL defaults to empty (no implicit destination). `timeoutMs` defaults to `1000` and must be finite between `1` and `30000` inclusive. Invalid options safely disable networking without disabling the local avatar.
-- **Image:** raw binary PNG, exactly 64×64. In avatar mode, an opaque black canvas with configurable transparency background inside the sprite bounds (black by default). Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. When both activity status and phase are `idle` but the active subagent count is positive, the embedded labels instead read exactly `SUBAGENTS (n)` and `RUNNING`; this is display-only, so internal status/phase and protocol headers remain `idle`. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared avatar/clock images.
+- **Image:** raw binary PNG, exactly 64×64. In avatar mode, an opaque black canvas by default, with configurable background inside the sprite bounds; `transparentBackground: true` instead preserves source RGBA on a transparent canvas. Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. When both activity status and phase are `idle` but the active subagent count is positive, the embedded labels instead read exactly `SUBAGENTS (n)` and `RUNNING`; this is display-only, so internal status/phase and protocol headers remain `idle`. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared avatar/clock images.
 - **Delivery:** per destination, one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set + activity selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
 - **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. In avatar mode, destinations receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine. Subagent processes marked with `GENTLE_PI_AGENTS_CHILD=1` do not activate the extension, even when RPC reports a UI: they cannot render an avatar, send HTTP/D200 frames, or change shared output preferences. The primary session retains its normal delegation scenes and subagent count; interactive RPC hosts without the child marker remain supported.
 
 When status is `error` and phase is `idle`, the external display's status row shows `IDLE` in the same red instead of `ERROR`. Errors during non-idle phases retain red `ERROR`. This label change is external-display-only: internal activity, protocol headers and terminal rendering remain unchanged.
 
-Optional `outline: "#ffffff"` adds a one-pixel external white silhouette to display PNGs only (not terminal art or text labels). It can be inherited from the parent or overridden per target. Transparent sprites use their alpha mask; fully opaque sprites such as the shipped set treat pure black as background. Only background connected to the outside is outlined, so enclosed holes stay untouched. Black artwork touching the external black matte cannot be distinguished from it. The outline may extend one pixel outside the sprite bounds; pixels at the top canvas edge are clipped. Omit the option to disable it.
+Optional `outline: "#ffffff"` adds a one-pixel external white silhouette to display PNGs only (not terminal art or text labels). It can be inherited from the parent or overridden per target. Sprites with any transparency use their alpha mask; fully opaque sprites treat pure black as background for the outline only. Only background connected to the outside is outlined, so enclosed holes stay untouched. Black artwork touching the external black matte cannot be distinguished from it. The outline may extend one pixel outside the sprite bounds; pixels at the top canvas edge are clipped. Omit the option to disable it.
 
 ### Idle clock after five minutes
 
@@ -222,7 +243,7 @@ After **more than five uninterrupted minutes** with both activity status and pha
 
 Busy/error activity, a non-idle phase, a detailed work phase, active subagents or an explicit non-idle frame preview cancels the idle deadline. The idle/grandma avatar remains eligible; its separate 30-second grandma timer is unchanged. When activity resumes, the remembered avatar returns through the normal delivery queue. Reload/recreation starts a fresh deadline; elapsed idle time uses a monotonic clock rather than wall-clock time.
 
-The clock uses its own black canvas and fixed readable palette, not the avatar's transparency background, accent or silhouette outline. There are no new commands or configuration fields. `/emote status` still reports the renderer's **source avatar PNG**; receiver headers identify the delivered clock as state `clock`, frame `clock.png`, set `idle-clock`.
+The clock uses its own black canvas by default, or a transparent canvas when that destination has `transparentBackground: true`. Its fixed readable palette is unchanged; avatar `background`, `backgroundCoverage`, accent and silhouette outline do not affect it. There are no clock-specific commands or configuration fields. `/emote status` still reports the renderer's **source avatar PNG**; receiver headers identify the delivered clock as state `clock`, frame `clock.png`, set `idle-clock`.
 
 ### Ulanzi D200 key
 

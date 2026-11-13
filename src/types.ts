@@ -21,6 +21,8 @@ export interface ExternalDisplayConfig {
   enabled: boolean;
   url: string;
   timeoutMs: number;
+  /** Preserve source RGBA on a transparent canvas, including idle clocks. Default false. */
+  transparentBackground?: boolean;
   /** RGB background used when composing the opaque display PNG. */
   background?: string;
   /** Static background pixel coverage (0–1); avoids temporal flicker. */
@@ -28,7 +30,7 @@ export interface ExternalDisplayConfig {
   /** Optional one-pixel external silhouette color. */
   outline?: string;
   /** When present, replaces the legacy single URL with independent destinations. */
-  targets?: Array<{ enabled: boolean; url: string; timeoutMs?: number; background?: string; backgroundCoverage?: number; outline?: string }>;
+  targets?: Array<{ enabled: boolean; url: string; timeoutMs?: number; transparentBackground?: boolean; background?: string; backgroundCoverage?: number; outline?: string }>;
 }
 
 export interface Config {
