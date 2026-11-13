@@ -27,11 +27,13 @@ export function createD200Display(options: {
   port?: number;
   fetcher?: typeof fetch;
   report?: (message: string) => void;
+  sessionId?: string | null;
 } = {}): ExternalDisplay {
   const url = d200Url(options.port ?? resolveD200Port());
   return new ExternalDisplay(
     { enabled: true, url, timeoutMs: 1000 },
     options.fetcher ?? fetch,
     options.report ?? (() => {}),
+    options.sessionId ?? null,
   );
 }

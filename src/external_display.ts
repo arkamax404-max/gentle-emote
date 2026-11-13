@@ -46,12 +46,12 @@ export function isLoopbackDisplayUrl(url: string): boolean {
 export class ExternalDisplays {
   private displays: ExternalDisplay[] = [];
 
-  constructor(options: unknown, fetcher: typeof fetch = fetch, report: (message: string) => void = () => {}) {
+  constructor(options: unknown, fetcher: typeof fetch = fetch, report: (message: string) => void = () => {}, sessionId: string | null = null) {
     if (!options || typeof options !== "object") return;
     const config = options as ExternalDisplayConfig;
     if (config.enabled !== true) return;
     if (config.targets === undefined) {
-      this.displays = [new ExternalDisplay(options, fetcher, report)];
+      this.displays = [new ExternalDisplay(options, fetcher, report, sessionId)];
       return;
     }
     if (!Array.isArray(config.targets) || config.targets.length > 8) {
@@ -62,6 +62,7 @@ export class ExternalDisplays {
       target && typeof target === "object" ? { timeoutMs: config.timeoutMs, transparentBackground: config.transparentBackground, background: config.background, backgroundCoverage: config.backgroundCoverage, outline: config.outline, ...target } : null,
       fetcher,
       message => report(`destination ${index + 1}: ${message}`),
+      sessionId,
     ));
   }
 
@@ -99,6 +100,12 @@ export class ExternalDisplay {
   private options: ExternalDisplayConfig | null;
   private streamId = randomUUID();
   private sequence = 0n;
+  // Capture identity for this sender lifetime: queued frames cannot change sessions.
+  private readonly sessionId: string | null;
+  private heartbeatUrl: string | null = null;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatPending = false;
+  private hasFrame = false;
   private disposed = false;
   private paused = false;
   private active: AbortController | null = null;
@@ -116,13 +123,25 @@ export class ExternalDisplay {
   private fetcher: typeof fetch;
   private report: (message: string) => void;
 
-  constructor(options: unknown, fetcher: typeof fetch = fetch, report: (message: string) => void = () => {}) {
+  constructor(options: unknown, fetcher: typeof fetch = fetch, report: (message: string) => void = () => {}, sessionId: string | null = null) {
     this.fetcher = fetcher;
     this.report = report;
+    this.sessionId = typeof sessionId === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(sessionId) ? sessionId : null;
     this.options = normalizeExternalDisplay(options);
     if (this.options) {
       this.clockTimer = setInterval(() => this.queueLatest(), IDLE_CLOCK_TICK_MS);
       this.clockTimer.unref?.();
+      const url = new URL(this.options.url);
+      if (this.sessionId && url.pathname === "/emote" && !url.search) {
+        url.pathname = "/emote/heartbeat";
+        this.heartbeatUrl = url.href;
+        this.heartbeatTimer = setInterval(() => {
+          if (this.disposed || this.paused || !this.hasFrame || !this.heartbeatUrl) return;
+          this.heartbeatPending = true;
+          if (!this.active) void this.drain();
+        }, 5000);
+        this.heartbeatTimer.unref?.();
+      }
     }
     if (options && (options as ExternalDisplayConfig).enabled && !this.options) this.warn("externalDisplay: invalid configuration; disabled");
   }
@@ -138,6 +157,7 @@ export class ExternalDisplay {
     this.lastClockQueuedAt = null;
     if (paused) {
       this.pending = null;
+      this.heartbeatPending = false;
       if (this.timer) clearTimeout(this.timer);
       this.timer = null;
       this.active?.abort();
@@ -199,46 +219,56 @@ export class ExternalDisplay {
 
   private async drain(): Promise<void> {
     const image = this.pending;
-    if (!image || !this.options || this.disposed || this.paused) return;
+    if ((!image && !this.heartbeatPending) || !this.options || this.disposed || this.paused) return;
+    const heartbeat = !image;
     this.pending = null;
+    if (heartbeat) this.heartbeatPending = false;
     const controller = new AbortController();
     this.active = controller;
     this.timer = setTimeout(() => controller.abort(), this.options.timeoutMs);
     try {
-      // The selected state is part of the prepared label, so the cache must key it:
-      // the same base64 across different states renders different phase labels.
-      const cacheKey = image.clockAt === undefined
-        ? JSON.stringify([image.base64, image.state, image.activity.status, image.activity.phase, image.activity.activeSubagents, image.activity.workPhase])
-        : `idle-clock:${image.clockAt}`;
-      let body = this.cache.get(cacheKey);
-      if (!body) {
-        body = image.clockAt === undefined
-          ? prepareDisplayImage(image.base64, { ...image.activity, state: image.state }, this.options.background, this.options.backgroundCoverage, this.options.outline, this.options.transparentBackground)
-          : prepareIdleClockImage(image.clockAt, this.options.transparentBackground);
-        if (this.cache.size >= 32) this.cache.delete(this.cache.keys().next().value!);
-        this.cache.set(cacheKey, body);
-      }
-      if (this.sequence >= 99999999999999999999n) throw new Error("sequence exhausted");
-      const response = await this.fetcher(this.options.url, {
-        method: "POST", redirect: "error", signal: controller.signal, body,
-        headers: {
-          "Content-Type": "image/png", "X-Emote-Version": "1",
-          "X-Emote-State": image.state, "X-Emote-Frame": image.frame, "X-Emote-Set": image.set,
+      let body: Buffer | undefined;
+      const headers: Record<string, string> = { "X-Emote-Version": "1", "X-Emote-Stream-Id": this.streamId };
+      if (this.sessionId) headers["X-Emote-Session-Id"] = this.sessionId;
+      if (image) {
+        // Keep the same preparation and cache policy for legacy and session images.
+        const cacheKey = image.clockAt === undefined
+          ? JSON.stringify([image.base64, image.state, image.activity.status, image.activity.phase, image.activity.activeSubagents, image.activity.workPhase])
+          : `idle-clock:${image.clockAt}`;
+        body = this.cache.get(cacheKey);
+        if (!body) {
+          body = image.clockAt === undefined
+            ? prepareDisplayImage(image.base64, { ...image.activity, state: image.state }, this.options.background, this.options.backgroundCoverage, this.options.outline, this.options.transparentBackground)
+            : prepareIdleClockImage(image.clockAt, this.options.transparentBackground);
+          if (this.cache.size >= 32) this.cache.delete(this.cache.keys().next().value!);
+          this.cache.set(cacheKey, body);
+        }
+        Object.assign(headers, {
+          "Content-Type": "image/png", "X-Emote-State": image.state,
+          "X-Emote-Frame": image.frame, "X-Emote-Set": image.set,
           "X-Emote-Status": image.activity.status, "X-Emote-Phase": image.activity.phase,
-          ...(image.activity.workPhase === undefined ? {} : { "X-Emote-Work-Phase": image.activity.workPhase }),
           "X-Emote-Active-Subagents": String(image.activity.activeSubagents),
-          "X-Emote-Stream-Id": this.streamId, "X-Emote-Sequence": String(++this.sequence),
-        },
+          ...(image.activity.workPhase === undefined ? {} : { "X-Emote-Work-Phase": image.activity.workPhase }),
+        });
+      }
+      const limit = this.sessionId ? 18446744073709551615n : 99999999999999999999n;
+      if (this.sequence >= limit) throw new Error("sequence exhausted");
+      headers["X-Emote-Sequence"] = String(++this.sequence);
+      if (image) this.hasFrame = true;
+      const response = await this.fetcher(heartbeat ? this.heartbeatUrl! : this.options.url, {
+        method: "POST", redirect: "error", signal: controller.signal, body, headers,
       });
       // Do not retain or consume receiver content; release its connection/body.
       await response.body?.cancel();
-      if (!response.ok) this.deliveryDiagnostic("externalDisplay: receiver rejected frame");
+      // Older PNG receivers may not implement lifecycle routes. Probe only once.
+      if (heartbeat && response.status === 404) this.heartbeatUrl = null;
+      else if (!response.ok) this.deliveryDiagnostic("externalDisplay: receiver rejected frame");
     } catch { if (!this.disposed) this.deliveryDiagnostic("externalDisplay: delivery failed or timed out"); }
     finally {
       if (this.timer) clearTimeout(this.timer);
       this.timer = null;
       this.active = null;
-      if (!this.disposed && this.pending) void this.drain();
+      if (!this.disposed && (this.pending || this.heartbeatPending)) void this.drain();
     }
   }
 
@@ -246,6 +276,9 @@ export class ExternalDisplay {
     this.disposed = true;
     if (this.clockTimer) clearInterval(this.clockTimer);
     this.clockTimer = null;
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+    this.heartbeatPending = false;
     this.pending = null;
     this.selected = null;
     if (this.timer) clearTimeout(this.timer);

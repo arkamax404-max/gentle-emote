@@ -9,7 +9,7 @@ All four output groups default to off independently; keep the extension's `enabl
 | Output | Commands | Scope |
 |--------|----------|-------|
 | Terminal avatar | `/emote internalOn`, `/emote internalOff` | Terminal graphics/ASCII only |
-| Local simulators | `/emote debugOn`, `/emote debugOff` | Configured loopback targets |
+| Local simulators | `/emote localOn`, `/emote localOff` | Configured loopback targets; existing `debug.json` preference key is unchanged |
 | Ulanzi D200 key | `/emote d200On`, `/emote d200Off` | Dedicated mirror at `127.0.0.1:8003` |
 | LED/ESP32 display | `/emote displayOn`, `/emote displayOff` | Configured non-loopback targets |
 

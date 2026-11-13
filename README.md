@@ -111,8 +111,8 @@ A source that is already configured keeps loading until it is updated or removed
 | `/emote idle` | Stops a preview and goes back to rest |
 | `/emote internalOff` | Hides the terminal avatar and frees its prompt space; external PNG delivery continues |
 | `/emote internalOn` | Shows the terminal avatar again without disabling external delivery |
-| `/emote debugOff` | Pauses POSTs to configured localhost simulators; ESP32 delivery continues |
-| `/emote debugOn` | Resumes localhost delivery immediately with the latest PNG and activity |
+| `/emote localOff` | Pauses POSTs to configured localhost simulators; ESP32 delivery continues |
+| `/emote localOn` | Resumes localhost delivery immediately with the latest PNG and activity |
 | `/emote d200On` | Mirrors frames to a Ulanzi D200 key on `127.0.0.1:8003`, independently of `config.json` |
 | `/emote d200Off` | Stops the D200 mirror without touching configured destinations |
 | `/emote displayOn` | Resumes delivery to configured non-loopback LED/ESP32 destinations |
@@ -159,7 +159,7 @@ The `internal`, `debug`, `d200` and `display` outputs are **off by default**. Ea
 
 `internalOn` / `internalOff` affect only the terminal avatar (graphics or ASCII), not the animation engine, activity tracking or other outputs. While hidden, no terminal image uploads occur. Keep the extension's `enabled: true` so the commands remain available.
 
-`debugOn` / `debugOff` control configured loopback destinations (`localhost`, `.localhost`, IPv4 127/8 and IPv6 `::1`). `displayOn` / `displayOff` control configured non-loopback LED/ESP32 destinations. Each Off aborts that group's active requests and drops pending frames; On resumes with the latest selection and activity. Neither group affects the dedicated D200 mirror or diagnostic logging (`config.debug`).
+`localOn` / `localOff` control configured loopback destinations (`localhost`, `.localhost`, IPv4 127/8 and IPv6 `::1`). They replace the old `debugOn` / `debugOff` subcommands (not aliases); existing saved choices remain in `output-states/debug.json`, with no migration or preference reset. `displayOn` / `displayOff` control configured non-loopback LED/ESP32 destinations. Each Off aborts that group's active requests and drops pending frames; On resumes with the latest selection and activity. Neither group affects the dedicated D200 mirror or diagnostic logging (`config.debug`).
 
 Output commands do not write `config.json`, invent destinations or enable entries explicitly disabled in configuration. An On preference can be saved before configuring its destination, but delivery still requires valid, enabled external-display configuration. Unreadable or malformed saved preferences leave that output off with a warning; a failed save reports an error and leaves the current output unchanged.
 
@@ -219,11 +219,11 @@ The boolean defaults to `false`: existing simulator/hardware output stays opaque
 
 Optional `background` accepts an RGB hex color (`"#000000"` by default). It composites genuinely transparent pixels only within the drawn sprite PNG bounds; outer canvas padding and the text area stay black. **opaque black pixels in sprites remain black**. Set `"background": "#404040"` on the parent to try a dim gray on both destinations, or on one target to override it independently. Invalid color values disable that destination. Very dark grays may quantize to black on low-bit-depth panels. Optional `backgroundCoverage` (0–1, default 1) applies a fixed 4×4 ordered dither to the transparency background only; `0.75` retains 75% gray pixels and uses black for the rest. Coverage has 1/16 increments and is inherited/overridden per target. This reduces apparent background brightness without temporal flicker or changing opaque artwork.
 
-Run `/reload`, open the simulator in your browser, then `/emote debugOn` and `/emote demo`. For the LED/ESP32, use `/emote displayOn`. Stop each group with its corresponding Off command; the choice persists. Shutdown/reload aborts pending delivery, then the next session restores saved preferences.
+Run `/reload`, open the simulator in your browser, then `/emote localOn` and `/emote demo`. For the LED/ESP32, use `/emote displayOn`. Stop each group with its corresponding Off command; the choice persists. Shutdown/reload aborts pending delivery, then the next session restores saved preferences.
 
-- **Trust:** project config can override destinations through the normal layered merge; saved `debugOn` or `displayOn` preferences allow delivery to those enabled destinations. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, session IDs, file paths, or credentials are sent.
+- **Trust:** project config can override destinations through the normal layered merge; saved `localOn` or `displayOn` preferences allow delivery to those enabled destinations. Review it before using this extension in a project. Use only local, trusted destinations: this iteration has no authentication; HTTP is unencrypted. Do not expose the receiver publicly. URLs must explicitly use HTTP(S), without credentials or fragments. No prompts, tool arguments, file paths, or credentials are sent. When a session identity is available, PNG requests include it for independent avatar routing.
 - **Options:** disabled by default; URL defaults to empty (no implicit destination). `timeoutMs` defaults to `1000` and must be finite between `1` and `30000` inclusive. Invalid options safely disable networking without disabling the local avatar.
-- **Image:** raw binary PNG, exactly 64×64. In avatar mode, an opaque black canvas by default, with configurable background inside the sprite bounds; `transparentBackground: true` instead preserves source RGBA on a transparent canvas. Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow, and phase is light gray. When both activity status and phase are `idle` but the active subagent count is positive, the embedded labels instead read exactly `SUBAGENTS (n)` and `RUNNING`; this is display-only, so internal status/phase and protocol headers remain `idle`. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared avatar/clock images.
+- **Image:** raw binary PNG, exactly 64×64. In avatar mode, an opaque black canvas by default, with configurable background inside the sprite bounds; `transparentBackground: true` instead preserves source RGBA on a transparent canvas. Post-accent sprites are centered without enlargement in a 48×40 viewport at the top (x=8, y=0 for native sprites), leaving the bottom 24 rows for labels embedded in the PNG: uppercase status and active subagent count (e.g. `BUSY (2)`) at y=44–48 and phase at y=54–58, centered in a native 3×5 pixel font. Status is green (idle), amber (busy), or red (error); the count and parentheses are yellow and appear only when the count is positive (zero or missing counts show the status alone), and phase is near-white light gray (`#eeeeee`). When both activity status and phase are `idle` but the active subagent count is positive, the embedded labels instead read exactly `SUBAGENTS (n)` and `RUNNING`; this is display-only, so internal status/phase and protocol headers remain `idle`. Oversized sprites shrink proportionally with nearest-neighbor sampling. Terminal borders are not mirrored. A separate cache retains at most 32 prepared avatar/clock images.
 - **Delivery:** per destination, one request in flight and one replaceable latest pending frame; intermediate frames may be dropped. No retries or redirects. Identical image + state/frame/set + activity selections are deduplicated even on forced terminal redraws. Failure never blocks animation; a failed selection is not retried until a visual change.
 - **Scope:** interactive sessions mirror PNGs even when the terminal only supports ASCII (including forced ASCII in tmux/zellij). Text stays local; PNG animation selection and POST delivery do not require a terminal image protocol. In avatar mode, destinations receive the selected set's post-accent frames, labels and outline. For an explicitly ASCII-only set, external images fall back to the shipped `gentleman` set. Disabled/invalid destinations preserve the original ASCII-only behavior. Headless sessions still do not mirror; hidden widgets may select frames, but this is not a separate headless animation engine. Subagent processes marked with `GENTLE_PI_AGENTS_CHILD=1` do not activate the extension, even when RPC reports a UI: they cannot render an avatar, send HTTP/D200 frames, or change shared output preferences. The primary session retains its normal delegation scenes and subagent count; interactive RPC hosts without the child marker remain supported.
 
@@ -273,8 +273,9 @@ to the terminal: selected avatar frames with labels/outline, or the idle clock, 
 | `X-Emote-Active-Subagents` | Nonnegative count of active subagent tasks (native task lifecycle when observed, otherwise in-flight tool calls) |
 | `X-Emote-Frame` | Selected filename, e.g. `think.png`, or `clock.png` for the idle clock |
 | `X-Emote-Set` | Actual avatar set directory basename, never its path; `idle-clock` for the synthetic clock face |
-| `X-Emote-Stream-Id` | Random UUID per sender lifetime |
-| `X-Emote-Sequence` | Increasing positive integer (1–20 digits), assigned per request |
+| `X-Emote-Session-Id` | Optional stable host session ID; absent when unavailable or invalid |
+| `X-Emote-Stream-Id` | Random UUID per destination sender lifetime |
+| `X-Emote-Sequence` | Increasing positive integer assigned when sending each image or heartbeat; at most u64 for session-aware traffic, otherwise the legacy 1–20 digit range |
 
 Activity-only changes resend the PNG even when the sprite has not changed; its pixels stay identical if the selected state and status/count labels are unchanged. These additive v1 headers contain no reasoning text or tool arguments. Subagent counts come from Gentle Shell's native task lifecycle bus (`gentle-pi:notification:source`, statuses `queued`/`running`/`waiting` active and `completed`/`failed`/`cancelled`/`timed_out` terminal): once a transition was observed for the current session that count is authoritative, it is not summed with tool calls, survives agent boundaries and compaction, and only an actual session change clears it. On hosts without the bus (or before the first transition), the count falls back to observed `subagent_run/continue/reply` calls (including MCP-prefixed names) as before, resetting at agent boundaries. Restore is silent — there is no snapshot or replay — so tasks queued before the subscription (a reload, or a start mid-task) become visible only at their next emitted transition. Foreign-session, malformed and duplicate/out-of-order notifications never mutate the count, and a finished task can never be resurrected by a late event. The receiver can display the PNG directly without drawing status/phase text itself. Counts above 999 display as `(999+)`; the header retains the exact count. Older receivers can ignore these headers.
 
@@ -285,6 +286,35 @@ This wording is display-only: `/emote write` still previews the `write` state, `
 Without a registered selected state, a detailed ODD work phase replaces only the coarse `thinking`/`executing` label; otherwise the coarse phase remains. Headers are unchanged: `X-Emote-Phase` stays coarse, and optional `X-Emote-Work-Phase` reports the published detail, not the image name. The native phase takes priority over the direct tool fallback, which clears at agent boundaries. A host without the phase bus can still use the fallback if it provides the `gentle_odd_phase` tool; this extension does not register that tool.
 
 Identifiers must match `[A-Za-z0-9_-][A-Za-z0-9_.-]{0,127}`. Unsupported custom names are skipped and reported without affecting local rendering. Delivery failures, timeouts and HTTP rejections are silent in the UI and logged only when `debug` is enabled. Configuration and unsupported-identifier errors still produce warnings. Diagnostics never include payloads or the destination URL.
+
+### Session-aware desktop avatars
+
+When the host exposes a valid session ID, every image carries it. IDs are captured
+before constructing the destination clients and remain immutable for their lifetime.
+A new `session_start` creates new streams for the current session. Session IDs must
+match `[A-Za-z0-9._:-]{1,128}`; missing, invalid, or throwing host identity falls back
+to the legacy PNG sender. These IDs are metadata, not authentication.
+
+For an exact `/emote` destination without a query string, session-aware clients also
+send a **bodyless `POST /emote/heartbeat` every 5 seconds** after the first image is
+sent. Heartbeats carry only version, session ID, stream ID and sequence headers.
+They share the bounded image queue and timeout; pending images take priority.
+Unchanged images remain deduplicated. A receiver returning 404 for the heartbeat
+route is probed only once per sender lifetime; its ordinary PNG delivery continues.
+Other destination paths and clients without a session ID get no heartbeat route.
+
+The desktop keeps one avatar per session and expires it after **30 seconds without
+a valid image or heartbeat**. It retains the final avatar's last image when none
+remain active; a new live session replaces that retained image. A timed-out known
+session can reactivate through newer communication.
+
+Pausing an output or disposing the extension stops its heartbeats. The current
+shutdown hook does not establish permanent closure versus reload, so this sender
+uses timeout fallback rather than falsely sending a close event. Turn completion
+and idle periods do not close sessions. The receiver supports explicit close for
+clients with a proven close event, but this extension does not infer one. Child
+sessions remain excluded from all shared-display delivery. No destinations or
+output preferences are enabled automatically.
 
 ## Create your own avatar
 

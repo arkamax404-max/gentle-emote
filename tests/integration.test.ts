@@ -12,7 +12,7 @@ const SESSION_ID = "integration-session";
 const SUBAGENT_CHANNEL = "gentle-pi:notification:source";
 
 /** Loads the extension against a fake Pi and a real pi-tui component tree (Ghostty, no multiplexer). */
-export async function boot(cwd = "/tmp", outputs = ["internalOn", "debugOn", "displayOn"], profile?: string, childSession = false) {
+export async function boot(cwd = "/tmp", outputs = ["internalOn", "localOn", "displayOn"], profile?: string, childSession = false) {
   const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
   const agentRoot = profile ?? mkdtempSync(join(tmpdir(), "emote-profile-"));
   for (const key of ["TMUX", "ZELLIJ", "ZELLIJ_SESSION_NAME", "KITTY_WINDOW_ID", "TERM_PROGRAM", "GENTLE_PI_AGENTS_CHILD"]) delete process.env[key];
@@ -163,6 +163,19 @@ test("session wiring mirrors image selections and prompt overlays, shutdown stop
     await lab.emit("ui_prompt_end");
     await new Promise<void>(resolve => setImmediate(resolve));
     assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-State"), "tool");
+    assert.ok(calls.every(call => new Headers(call.headers).get("X-Emote-Session-Id") === SESSION_ID), "identity is bound before the first image");
+    const originalStream = new Headers(calls.at(-1)!.headers).get("X-Emote-Stream-Id");
+    const beforeSwitch = calls.length;
+    lab.ctx.sessionManager.getSessionId = () => "integration-session-B";
+    await lab.emit("session_start");
+    // Startup and agent_start alone select no image; drive a public preview.
+    await lab.commands.get("emote").handler("read", lab.ctx);
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const switched = calls.slice(beforeSwitch);
+    assert.ok(switched.length > 0);
+    assert.ok(switched.every(call => new Headers(call.headers).get("X-Emote-Session-Id") === "integration-session-B"));
+    assert.notEqual(new Headers(switched[0]!.headers).get("X-Emote-Stream-Id"), originalStream);
+    assert.ok(calls.slice(0, beforeSwitch).every(call => new Headers(call.headers).get("X-Emote-Session-Id") === SESSION_ID), "old requests keep their original identity");
     await lab.shutdown();
     const count = calls.length;
     await lab.emit("tool_execution_start", { toolName: "read" });
@@ -378,18 +391,22 @@ test("internalOff removes the terminal avatar but preserves PNG POSTs and intern
     await lab.emit("ui_prompt_end"); await tick();
     await command.handler("internalOff", lab.ctx); // Idempotent.
     assert.equal(lab.writes.length, writes, "no terminal graphics are transmitted while hidden");
-    assert.deepEqual(command.getArgumentCompletions("debug").map((item: any) => item.value), ["debugOn", "debugOff"]);
+    assert.deepEqual(command.getArgumentCompletions("local").map((item: any) => item.value), ["localOn", "localOff"]);
+    assert.ok(command.getArgumentCompletions("local").every((item: any) => item.description));
+    assert.deepEqual(command.getArgumentCompletions("debug"), []);
+    assert.ok(command.description.includes("localOn | localOff"));
+    assert.ok(!command.description.includes("debugOn"));
     const localBefore = calls.filter(call => call.url.includes("localhost")).length;
     const deviceBefore = calls.filter(call => call.url.includes("matrix")).length;
-    await command.handler("debugOff", lab.ctx);
+    await command.handler("localOff", lab.ctx);
     await lab.emit("tool_execution_start", { toolName: "bash", toolCallId: "b" }); await tick();
     assert.equal(calls.filter(call => call.url.includes("localhost")).length, localBefore);
     const deviceAfter = calls.filter(call => call.url.includes("matrix")).length;
     assert.ok(deviceAfter > deviceBefore, "ESP32 keeps updating with both local outputs off");
-    await command.handler("debugOn", lab.ctx); await tick();
+    await command.handler("localOn", lab.ctx); await tick();
     assert.equal(calls.filter(call => call.url.includes("localhost")).length, localBefore + 1);
-    assert.equal(calls.filter(call => call.url.includes("matrix")).length, deviceAfter, "ESP32 stream is untouched by debugOn");
-    assert.equal(lab.writes.length, writes, "debug commands do not show the internal avatar");
+    assert.equal(calls.filter(call => call.url.includes("matrix")).length, deviceAfter, "ESP32 stream is untouched by localOn");
+    assert.equal(lab.writes.length, writes, "local commands do not show the internal avatar");
     await command.handler("internalOn", lab.ctx); await tick();
     lab.widgets.render(100);
     assert.ok(lab.editor.render(100).join("\n").includes(PLACEHOLDER));
@@ -508,8 +525,9 @@ test("all outputs default off; independent global switches survive project chang
     await emote.handler("displayOn", lab.ctx); await flush();
     assert.deepEqual(calls, ["http://matrix/emote"], "displayOn resumes latest frame only on ESP32");
     calls.length = 0;
-    await emote.handler("debugOn", lab.ctx); await flush();
+    await emote.handler("localOn", lab.ctx); await flush();
     assert.deepEqual(calls, ["http://localhost:8000/emote"]);
+    assert.equal(new OutputStateStore(profile).load(() => {}).debug, true, "localOn preserves the existing debug preference key");
     await emote.handler("d200On", lab.ctx); await flush();
     calls.length = 0;
     await emote.handler("displayOff", lab.ctx);
@@ -531,7 +549,20 @@ test("all outputs default off; independent global switches survive project chang
     assert.ok(calls.includes("http://127.0.0.1:8003/emote"));
     assert.ok(calls.includes("http://matrix/emote"), "global displayOn survives restart");
     assert.ok(!calls.includes("http://disabled/emote"), "On never enables disabled destinations");
-    for (const output of ["internalOff", "debugOff", "d200Off", "displayOff"]) await lab.commands.get("emote").handler(output, lab.ctx);
+    for (const output of ["internalOff", "localOff", "d200Off", "displayOff"]) await lab.commands.get("emote").handler(output, lab.ctx);
+    const store = new OutputStateStore(profile);
+    const saved = store.load(() => {});
+    for (const obsolete of ["debugOn", "debugOff"]) {
+      const count = calls.length;
+      const command = lab.commands.get("emote");
+      await command.handler(obsolete, lab.ctx); await flush();
+      assert.deepEqual(store.load(() => {}), saved, "obsolete command cannot change saved outputs");
+      assert.equal(calls.length, count, "obsolete command cannot send a frame");
+      assert.deepEqual(lab.notices.at(-1), {
+        message: `[gentle-emote] /emote <state>: ${command.getArgumentCompletions("").map((item: any) => item.value).join(", ")}`,
+        level: "info",
+      });
+    }
     await lab.shutdown(); lab.restore(); lab = undefined;
     calls.length = 0;
     lab = await boot(join(root, "a"), [], profile);

@@ -101,13 +101,18 @@ const EMOTE_DESCRIPTIONS: Record<string, string> = {
   internalOn: "show the terminal avatar (external delivery stays active)",
   internalOff: "hide the terminal avatar (external delivery stays active)",
   status: "show the last selected PNG, work phase source and activity snapshot (read-only diagnostic)",
-  debugOn: "resume delivery to configured localhost simulators",
-  debugOff: "pause localhost delivery without affecting the ESP32",
+  localOn: "resume delivery to configured localhost simulators",
+  localOff: "pause localhost delivery without affecting the ESP32",
   d200On: "mirror every frame to the Ulanzi D200 key on 127.0.0.1:8003",
   d200Off: "stop mirroring to the Ulanzi D200 key",
   displayOn: "resume delivery to configured LED/ESP32 displays",
   displayOff: "pause LED/ESP32 delivery without affecting localhost or D200",
 };
+
+// Public command names are independent of the existing persisted output keys.
+function outputCommandName(output: (typeof OUTPUTS)[number]): string {
+  return output === "debug" ? "local" : output;
+}
 
 /** Check if a set directory contains any image frames (PNG files in state subdirs). */
 function hasImageFrames(setDir: string): boolean {
@@ -264,6 +269,7 @@ export default function (pi: ExtensionAPI) {
       d200Display = createD200Display({
         fetcher: fetch,
         report: (message) => ctx.ui?.notify?.(`[${EXTENSION_NAME}] ${message}`, "warning"),
+        sessionId: sessionId(),
       });
       d200Display.updateActivity(displayActivity.snapshot());
       renderer.setFrameSink?.(frameSink());
@@ -545,9 +551,9 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.registerCommand?.("emote", {
-    description: "Gentle-emote: /emote <state> | demo | status | internalOn | internalOff | debugOn | debugOff | d200On | d200Off | displayOn | displayOff (global, persistent)",
+    description: "Gentle-emote: /emote <state> | demo | status | internalOn | internalOff | localOn | localOff | d200On | d200Off | displayOn | displayOff (global, persistent)",
     getArgumentCompletions: (prefix: string) =>
-      [...EMOTE_STATES, "demo", "status", ...OUTPUTS.flatMap(output => [`${output}On`, `${output}Off`])]
+      [...EMOTE_STATES, "demo", "status", ...OUTPUTS.flatMap(output => [`${outputCommandName(output)}On`, `${outputCommandName(output)}Off`])]
         .filter((name) => name.startsWith(prefix.trim()))
         .map((name) => ({ value: name, label: name, description: EMOTE_DESCRIPTIONS[name] })),
     handler: async (args: string, ctx: any) => {
@@ -556,11 +562,11 @@ export default function (pi: ExtensionAPI) {
         ctx.ui?.notify?.(`[${EXTENSION_NAME}] avatar inactive (no UI or disabled)`, "warning");
         return;
       }
-      const output = OUTPUTS.find(output => name === `${output}On` || name === `${output}Off`);
+      const output = OUTPUTS.find(output => name === `${outputCommandName(output)}On` || name === `${outputCommandName(output)}Off`);
       if (output) {
-        try { outputState.save(output, name === `${output}On`); }
+        try { outputState.save(output, name === `${outputCommandName(output)}On`); }
         catch {
-          ctx.ui?.notify?.(`[${EXTENSION_NAME}] cannot save global ${output} state; output unchanged`, "error");
+          ctx.ui?.notify?.(`[${EXTENSION_NAME}] cannot save global ${outputCommandName(output)} state; output unchanged`, "error");
           return;
         }
       }
@@ -573,8 +579,8 @@ export default function (pi: ExtensionAPI) {
         setD200Display(name === "d200On", ctx);
         return;
       }
-      if (name === "debugOn" || name === "debugOff") {
-        const count = externalDisplay?.setDebugEnabled(name === "debugOn") ?? 0;
+      if (name === "localOn" || name === "localOff") {
+        const count = externalDisplay?.setDebugEnabled(name === "localOn") ?? 0;
         if (!count) ctx.ui?.notify?.(`[${EXTENSION_NAME}] no enabled localhost display configured`, "info");
         return;
       }
@@ -599,7 +605,7 @@ export default function (pi: ExtensionAPI) {
         previewState(name as EmoteState);
         return;
       }
-      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo", "status", ...OUTPUTS.flatMap(output => [`${output}On`, `${output}Off`])].join(", ")}`, "info");
+      ctx.ui?.notify?.(`[${EXTENSION_NAME}] /emote <state>: ${[...EMOTE_STATES, "demo", "status", ...OUTPUTS.flatMap(output => [`${outputCommandName(output)}On`, `${outputCommandName(output)}Off`])].join(", ")}`, "info");
     },
   });
 
@@ -610,6 +616,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     log(`session_start: hasUI=${ctx.hasUI}`);
     if (!ctx.hasUI) return;
+    // Bind identity before constructing this session's immutable delivery streams.
+    ctxRef = ctx;
 
     cancelGreeting();
     animator.clearAllTimers();
@@ -625,12 +633,11 @@ export default function (pi: ExtensionAPI) {
     externalDisplay?.dispose();
     // Never create shared-display senders in a child, even with saved On states.
     // Animation and output commands cannot bypass this ownership restriction.
-    externalDisplay = ownsSharedDisplays ? new ExternalDisplays(config.externalDisplay, fetch, report) : null;
+    externalDisplay = ownsSharedDisplays ? new ExternalDisplays(config.externalDisplay, fetch, report, sessionId()) : null;
     externalDisplay?.setDebugEnabled(states.debug);
     externalDisplay?.setDisplayEnabled(states.display);
     d200Display?.dispose();
-    d200Display = ownsSharedDisplays && states.d200 ? createD200Display({ fetcher: fetch, report }) : null;
-    ctxRef = ctx;
+    d200Display = ownsSharedDisplays && states.d200 ? createD200Display({ fetcher: fetch, report, sessionId: sessionId() }) : null;
     displayActivity.reset();
     directWorkPhase = null;
     attachWorkPhase();
@@ -677,6 +684,8 @@ export default function (pi: ExtensionAPI) {
     unwatchYolo();
     animator.stop();
     animator.disposeRenderer();
+    // The host shutdown hook does not prove a permanent session close (reloads
+    // also dispose extensions). Stop heartbeats and let the receiver lease expire.
     externalDisplay?.dispose();
     externalDisplay = null;
     d200Display?.dispose();

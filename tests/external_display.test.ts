@@ -13,6 +13,115 @@ const base64 = encodePng({ width: 1, height: 1, data: new Uint8Array([255, 0, 0,
 const frame = (name = "idle.png") => ({ base64, state: "idle", frame: name, set: "gentleman" });
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
+test("session identity is stable per destination and invalid IDs retain legacy delivery", async () => {
+  for (const session of ["session-A", "", "bad id", "x".repeat(129)]) {
+    const calls: RequestInit[] = [];
+    const sender = new ExternalDisplays({ ...options, targets: [options, { ...options, url: "http://matrix/emote" }] },
+      async (_url, init) => { calls.push(init!); return new Response(); }, () => {}, session);
+    try {
+      sender.select(frame()); await tick();
+      assert.equal(calls.length, 2);
+      for (const call of calls) {
+        const headers = new Headers(call.headers);
+        assert.equal(headers.get("X-Emote-Session-Id"), session === "session-A" ? session : null);
+        assert.equal(headers.get("X-Emote-Sequence"), "1");
+        assert.equal(headers.get("Content-Type"), "image/png");
+        assert.equal(call.method, "POST");
+        assert.ok(decodePng(Buffer.from(call.body as Uint8Array)));
+      }
+    } finally { sender.dispose(); }
+  }
+});
+
+test("session heartbeats run every five seconds independently of image dedup", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  const sender = new ExternalDisplay(options, async (url, init) => {
+    calls.push({ url: String(url), init: init! }); return new Response();
+  }, () => {}, "session-A");
+  try {
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0 });
+    t.mock.timers.tick(5000); await tick();
+    assert.equal(calls.length, 0, "no avatar exists before the first frame");
+    sender.select(frame()); await tick();
+    t.mock.timers.tick(4999); await tick();
+    assert.equal(calls.length, 1);
+    t.mock.timers.tick(1); await tick();
+    assert.equal(calls.length, 2);
+    const heartbeat = calls[1]!;
+    assert.equal(heartbeat.url, "http://127.0.0.1:8000/emote/heartbeat");
+    assert.equal(heartbeat.init.method, "POST");
+    assert.equal(heartbeat.init.body, undefined);
+    assert.deepEqual(Object.fromEntries(new Headers(heartbeat.init.headers)), {
+      "x-emote-session-id": "session-A", "x-emote-stream-id": new Headers(calls[0]!.init.headers).get("X-Emote-Stream-Id"),
+      "x-emote-sequence": "2", "x-emote-version": "1",
+    });
+    sender.select(frame()); await tick();
+    assert.equal(calls.length, 2, "unchanged images remain deduplicated");
+    sender.setPaused(true); t.mock.timers.tick(10000); await tick();
+    assert.equal(calls.length, 2, "paused output sends neither images nor heartbeats");
+    sender.setPaused(false); await tick();
+    assert.equal(calls.length, 3, "resume sends current image");
+    sender.dispose(); t.mock.timers.tick(10000); await tick();
+    assert.equal(calls.length, 3, "dispose stops communication without declaring session closure");
+  } finally { sender.dispose(); }
+});
+
+test("session image and heartbeat ordering shares one bounded delivery queue", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const calls: Array<{ url: string; init: RequestInit }> = [];
+  let release: (() => void) | undefined;
+  const sender = new ExternalDisplay(options, async (url, init) => {
+    calls.push({ url: String(url), init: init! });
+    if (calls.length === 1) return new Promise(resolve => { release = () => resolve(new Response()); });
+    return new Response();
+  }, () => {}, "session-A");
+  try {
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0 });
+    sender.select(frame()); sender.select(frame("latest.png"));
+    t.mock.timers.tick(5000); await tick();
+    assert.equal(calls.length, 1, "heartbeat cannot overtake the active request");
+    release!(); await tick(); await tick();
+    assert.equal(calls.length, 3);
+    assert.equal(new Headers(calls[1]!.init.headers).get("X-Emote-Frame"), "latest.png");
+    assert.equal(calls[2]!.url, `${options.url}/heartbeat`);
+    assert.deepEqual(calls.map(call => new Headers(call.init.headers).get("X-Emote-Sequence")), ["1", "2", "3"]);
+    assert.ok(calls.every(call => new Headers(call.init.headers).get("X-Emote-Session-Id") === "session-A"));
+  } finally { sender.dispose(); release?.(); }
+});
+
+test("an older receiver rejecting heartbeat routes is probed only once", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const calls: string[] = [];
+  const sender = new ExternalDisplay(options, async (target) => {
+    calls.push(String(target));
+    return new Response(null, { status: String(target).endsWith("/heartbeat") ? 404 : 204 });
+  }, () => {}, "session-A");
+  try {
+    sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0 });
+    sender.select(frame()); await tick();
+    t.mock.timers.tick(5000); await tick();
+    t.mock.timers.tick(15000); await tick();
+    assert.deepEqual(calls, [options.url, `${options.url}/heartbeat`]);
+    sender.select(frame("next.png")); await tick();
+    assert.equal(calls.at(-1), options.url, "legacy PNG delivery continues after lifecycle rejection");
+  } finally { sender.dispose(); }
+});
+
+test("legacy and non-protocol destinations never receive invented heartbeat routes", async (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  for (const [url, id] of [[options.url, null], ["http://matrix/custom", "session-A"], [`${options.url}?mode=png`, "session-A"]] as const) {
+    const calls: string[] = [];
+    const sender = new ExternalDisplay({ ...options, url }, async (target) => { calls.push(String(target)); return new Response(); }, () => {}, id);
+    try {
+      sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0 });
+      sender.select(frame()); await tick();
+      t.mock.timers.tick(10000); await tick();
+      assert.deepEqual(calls, [url]);
+    } finally { sender.dispose(); }
+  }
+});
+
 for (const renderer of [new ITermRenderer(10), new KittyUnicodeRenderer(10, false, 4)]) {
   test(`${renderer.constructor.name} preserves local output and mirrors all selection paths post-transform`, async () => {
     const originalWrite = process.stdout.write;
@@ -351,7 +460,7 @@ test("work phase metadata stays additive, validated and deduplicated without ove
     sender.select(frame("detail.png")); await tick();
     assert.equal(new Headers(calls.at(-1)!.headers).get("X-Emote-Work-Phase"), "planning");
 
-    // Both requests have the same selected idle state and busy (0) top row.
+    // Both requests have the same selected idle state and busy top row without a zero-count suffix.
     // Coarse/host metadata still changes HTTP headers, but not the selected label.
     const selectedIdle = calls.at(-1)!.body;
     sender.updateActivity({ status: "busy", phase: "executing", activeSubagents: 0, workPhase: "implementing" });
@@ -493,7 +602,7 @@ test("write displays WRITING while preserving the original sender metadata", asy
     assert.deepEqual([image.width, image.height], [64, 64]);
     const expected = new Uint8Array(64 * 64 * 4);
     for (let i = 3; i < expected.length; i += 4) expected[i] = 255;
-    drawDisplayText(expected, "WRITING", 54, [224, 224, 224]);
+    drawDisplayText(expected, "WRITING", 54, [238, 238, 238]);
     assert.deepEqual(image.data.slice(54 * 64 * 4, 59 * 64 * 4), expected.slice(54 * 64 * 4, 59 * 64 * 4));
   } finally { sender.dispose(); }
 });
