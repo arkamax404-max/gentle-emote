@@ -16,7 +16,9 @@ import subprocess
 import sys
 from collections.abc import Callable
 
-REPO = "efolchmontiel/gentle-emote"
+REPOSITORY_PATTERN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?/[A-Za-z0-9_.-]{1,100}"
+)
 CLASSIFICATION = frozenset(
     {"bug", "enhancement", "documentation", "performance", "refactor", "security"}
 )
@@ -37,12 +39,12 @@ class ValidationError(Exception):
     pass
 
 
-def closing_references(body: str) -> list[tuple[str, int]]:
+def closing_references(body: str, repository: str) -> list[tuple[str, int]]:
     found: list[tuple[str, int]] = []
     for match in REFERENCE.finditer(body or ""):
         url_owner, url_repo, url_number, short_owner, short_repo, short_number, local = match.groups()
         if local:
-            found.append((REPO, int(local)))
+            found.append((repository, int(local)))
             continue
         if url_number:
             found.append((f"{url_owner}/{url_repo}", int(url_number)))
@@ -61,8 +63,17 @@ def validate(
     author: str,
     author_association: str,
     base: str,
+    repository: str,
     fetch_issue: IssueFetcher,
 ) -> None:
+    if not repository:
+        raise ValidationError("repository context is missing")
+    if (not REPOSITORY_PATTERN.fullmatch(repository)
+            or repository.split("/")[1] in {".", ".."}
+            or "--" in repository.split("/")[0]):
+        raise ValidationError(f"invalid repository context: {repository!r}")
+    repository = repository.casefold()
+
     if base != "main":
         raise ValidationError(f"pull request target must be main, got {base!r}")
 
@@ -72,17 +83,19 @@ def validate(
             f"administrative exception is only valid for the repository owner, not {author!r}"
         )
 
-    refs = closing_references(body)
+    refs = closing_references(body, repository)
     if not refs and not exception:
         raise ValidationError(
             "pull request body needs a closing reference such as 'Closes #123' "
-            f"for an open, approved issue in {REPO}"
+            f"for an open, approved issue in {repository}"
         )
 
+    # Scope every reference before making even the first API request.
     for repo, number in refs:
-        if repo.lower() != REPO:
-            raise ValidationError(f"#{number} points at {repo}, not {REPO}")
-        issue = fetch_issue(repo, number)
+        if repo.casefold() != repository:
+            raise ValidationError(f"#{number} points at {repo}, not {repository}")
+    for _, number in refs:
+        issue = fetch_issue(repository, number)
         if issue.get("pull_request") is not None:
             raise ValidationError(f"#{number} is a pull request, not an issue")
         if issue.get("state") != "open":
@@ -120,6 +133,8 @@ def fetch_issue_from_github(repo: str, number: int) -> dict:
 
 
 def self_test() -> None:
+    # Historical fixture context, never a default for real pull requests.
+    repository = "efolchmontiel/gentle-emote"
     issues = {
         10: {"state": "open", "labels": [{"name": "bug"}, {"name": "approved"}]},
         11: {"state": "open", "labels": [{"name": "approved"}]},
@@ -129,13 +144,13 @@ def self_test() -> None:
     }
 
     def fetch(repo: str, number: int) -> dict:
-        if repo != REPO or number not in issues:
+        if repo != repository or number not in issues:
             raise ValidationError(f"#{number} could not be read: Not Found")
         return issues[number]
 
     def expect_fail(**kwargs: str) -> None:
         try:
-            validate(fetch_issue=fetch, **kwargs)
+            validate(repository=repository, fetch_issue=fetch, **kwargs)
         except ValidationError:
             return
         raise AssertionError(f"expected failure for {kwargs!r}")
@@ -145,6 +160,7 @@ def self_test() -> None:
         author="guest",
         author_association="CONTRIBUTOR",
         base="main",
+        repository=repository,
         fetch_issue=fetch,
     )
     validate(
@@ -152,6 +168,7 @@ def self_test() -> None:
         author="guest",
         author_association="CONTRIBUTOR",
         base="main",
+        repository=repository,
         fetch_issue=fetch,
     )
     validate(
@@ -159,6 +176,7 @@ def self_test() -> None:
         author="efolchmontiel",
         author_association="OWNER",
         base="main",
+        repository=repository,
         fetch_issue=fetch,
     )
     expect_fail(body="Closes #", author="guest", author_association="NONE", base="main")
@@ -197,6 +215,10 @@ def main() -> int:
         return 0
 
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--repository", default=os.environ.get("PR_REPOSITORY", ""),
+        help="required owner/name context (default: PR_REPOSITORY); use trusted workflow context",
+    )
     parser.add_argument("--body", default=os.environ.get("PR_BODY", ""))
     parser.add_argument("--author", default=os.environ.get("PR_AUTHOR", ""))
     parser.add_argument("--author-association", default=os.environ.get("PR_AUTHOR_ASSOCIATION", ""))
@@ -208,6 +230,7 @@ def main() -> int:
             author=args.author,
             author_association=args.author_association,
             base=args.base,
+            repository=args.repository,
             fetch_issue=fetch_issue_from_github,
         )
     except ValidationError as error:
