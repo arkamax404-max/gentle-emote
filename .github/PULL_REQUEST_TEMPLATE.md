@@ -6,13 +6,15 @@
 Closes #
 ```
 
-Use an open issue in this repository that already has the `approved` label. `Closes #123` is the reference the check reads. A placeholder is not a reference.
+Use an open, classified issue in `arkamax404-max/gentle-emote` that already has the `approved` label. `Closes #123` is the reference the check reads. A placeholder is not a reference.
 
-Owner-only administrative maintenance may instead use this line alone:
+OWNER-only administrative housekeeping (not runtime features) may instead use this line alone:
 
 ```text
 Administrative-exception: owner-maintenance
 ```
+
+This does not waive an approving review or validation of any issue references included in the body.
 
 ## Type
 

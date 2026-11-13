@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Private security report
+  - name: Upstream-only private security report
     url: https://github.com/efolchmontiel/gentle-emote/security/advisories/new
-    about: Report a sensitive vulnerability in private. Do not open a public issue.
+    about: For vulnerabilities in upstream efolchmontiel/gentle-emote only, not this fork. Do not disclose vulnerabilities in public issues.
