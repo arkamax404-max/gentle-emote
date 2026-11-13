@@ -95,7 +95,7 @@ Restart the session (or `/reload`), then run `/emote internalOn` to show the Gen
 
 ```bash
 pi install npm:gentle-emote        # published package
-pi install ./gentle-emote          # local checkout with the changes (loaded from that path)
+pi install ./gentle-emotex          # local checkout with the changes (loaded from that path)
 ```
 
 A source that is already configured keeps loading until it is updated or removed (`pi remove <source>`); installing an additional source does not replace it automatically.

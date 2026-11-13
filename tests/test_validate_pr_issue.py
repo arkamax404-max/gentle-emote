@@ -12,7 +12,7 @@ from unittest.mock import call, patch
 
 
 CLI = runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts/validate-pr-issue.py"))
-REPO = "arkamax404-max/gentle-emote"
+REPO = "arkamax404-max/gentle-emotex"
 UPSTREAM = "efolchmontiel/gentle-emote"
 MARKER = "Administrative-exception: owner-maintenance"
 GOOD = {"state": "open", "labels": [{"name": "bug"}, {"name": "approved"}]}
@@ -55,8 +55,8 @@ class RepositoryContextCLI(unittest.TestCase):
                        lookups=[(REPO, 10)])
 
     def test_same_repository_qualified_and_url_are_case_insensitive(self):
-        for ref in ("ArKaMaX404-MaX/Gentle-Emote#10",
-                    "https://github.com/ArKaMaX404-MaX/Gentle-Emote/issues/10"):
+        for ref in ("ArKaMaX404-MaX/Gentle-Emotex#10",
+                    "https://github.com/ArKaMaX404-MaX/Gentle-Emotex/issues/10"):
             with self.subTest(ref=ref):
                 self.check_cli(env={"PR_BODY": f"Fixes {ref}"}, lookups=[(REPO, 10)])
 

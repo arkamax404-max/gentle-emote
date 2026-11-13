@@ -5,13 +5,13 @@
   "license": "MIT",
   "type": "module",
   "author": "efolchmontiel",
-  "homepage": "https://github.com/arkamax404-max/gentle-emote#readme",
+  "homepage": "https://github.com/arkamax404-max/gentle-emotex#readme",
   "bugs": {
-    "url": "https://github.com/arkamax404-max/gentle-emote/issues"
+    "url": "https://github.com/arkamax404-max/gentle-emotex/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/arkamax404-max/gentle-emote.git"
+    "url": "git+https://github.com/arkamax404-max/gentle-emotex.git"
   },
   "scripts": {
     "test": "node --test \"tests/*.test.ts\"",

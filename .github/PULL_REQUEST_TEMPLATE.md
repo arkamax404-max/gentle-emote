@@ -6,7 +6,7 @@ Write the closing reference on its own line and never inside a code block: GitHu
 
 Closes #
 
-Use an open, classified issue in `arkamax404-max/gentle-emote` that already has the `approved` label. `Closes #123` is the reference the check reads and the reference GitHub uses to close the issue. A placeholder is not a reference.
+Use an open, classified issue in `arkamax404-max/gentle-emotex` that already has the `approved` label. `Closes #123` is the reference the check reads and the reference GitHub uses to close the issue. A placeholder is not a reference.
 
 OWNER-only administrative housekeeping (not runtime features) may instead use this line alone:
 
